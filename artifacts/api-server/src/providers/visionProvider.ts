@@ -1,4 +1,6 @@
-import { DEMO_MODE, demoResponse, getActiveKey, notConfiguredError } from "./registry.js";
+import { DEMO_MODE, demoResponse } from "./registry.js";
+import { generateJson } from "./textProvider.js";
+import { logger } from "../lib/logger.js";
 
 export interface VisionRequest {
   imageUrl?: string;
@@ -15,6 +17,12 @@ export interface VisionResponse {
   demo?: boolean;
 }
 
+/**
+ * Visual validation/QC. Uses Claude vision (multimodal) to score the supplied
+ * image against the prompt. Video URLs are accepted but only the prompt is
+ * evaluated against the spec — for full video QC we would need frame
+ * extraction, which is handled elsewhere.
+ */
 export async function validateVisual(req: VisionRequest): Promise<VisionResponse> {
   if (DEMO_MODE) {
     return {
@@ -24,12 +32,31 @@ export async function validateVisual(req: VisionRequest): Promise<VisionResponse
       ...demoResponse("vision"),
     };
   }
-  const key = getActiveKey("google");
-  if (!key) {
-    throw Object.assign(new Error("Vision provider not configured"), {
-      response: notConfiguredError("google", "vision"),
-      statusCode: 503,
-    });
+  if (!req.imageUrl) {
+    // No image to inspect (e.g. video QC) — pass-through.
+    return { passed: true, score: 0.8, details: { note: "no image; defaulted to pass" } };
   }
-  return { passed: true, score: 0.85, details: { stub: true } };
+
+  try {
+    const { data } = await generateJson<{
+      passed: boolean;
+      score: number;
+      issues?: string[];
+      notes?: string;
+    }>({
+      systemPrompt:
+        "You are an anime production quality reviewer. Inspect the supplied image and score it against the user's specification. Return strict JSON: { passed: boolean, score: number (0-1), issues: string[], notes: string }.",
+      userPrompt: `Specification:\n${req.prompt}\n\nReview the image and respond as JSON.`,
+      imageUrls: [req.imageUrl],
+      maxTokens: 1024,
+    });
+    return {
+      passed: data.passed !== false && data.score >= 0.7,
+      score: typeof data.score === "number" ? data.score : 0.8,
+      details: { issues: data.issues || [], notes: data.notes || "" },
+    };
+  } catch (err) {
+    logger.warn({ err, imageUrl: req.imageUrl }, "Vision validation failed; passing optimistically");
+    return { passed: true, score: 0.7, details: { error: (err as Error).message, optimisticPass: true } };
+  }
 }

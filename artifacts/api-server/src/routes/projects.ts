@@ -297,6 +297,47 @@ router.get("/:id/playground/events", requireAuth, (req, res) => {
   req.on("close", cleanup);
 });
 
+router.get("/:id/story-bible", requireAuth, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const p = loadProject((req.params.id as string), u.sub);
+  if (!p) return notFound(res);
+  const bible = db.prepare("SELECT * FROM story_bibles WHERE project_id = ?").get(p.id);
+  if (!bible) {
+    res.json(null);
+    return;
+  }
+  const b = bible as Record<string, unknown>;
+  let parsed: unknown = null;
+  try {
+    parsed = b.arcs_json ? JSON.parse(b.arcs_json as string) : null;
+  } catch {
+    parsed = null;
+  }
+  res.json({ ...b, parsed });
+});
+
+router.get("/:id/characters", requireAuth, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const p = loadProject((req.params.id as string), u.sub);
+  if (!p) return notFound(res);
+  const rows = db
+    .prepare("SELECT * FROM characters WHERE project_id = ? ORDER BY created_at ASC")
+    .all(p.id);
+  res.json(rows);
+});
+
+router.get("/:id/scenes", requireAuth, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const p = loadProject((req.params.id as string), u.sub);
+  if (!p) return notFound(res);
+  const rows = db
+    .prepare(
+      "SELECT s.*, sv.start_frame_url, sv.end_frame_url FROM scenes s LEFT JOIN scene_visualizations sv ON sv.scene_id = s.id WHERE s.project_id = ? ORDER BY s.scene_number ASC",
+    )
+    .all(p.id);
+  res.json(rows);
+});
+
 router.get("/:id/agents", requireAuth, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);

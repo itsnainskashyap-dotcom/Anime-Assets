@@ -148,6 +148,36 @@ export function completeTask(taskId: string, result: Record<string, unknown>): v
   }
 }
 
+function cascadeFailDependents(rootTaskId: string, reason: string): void {
+  const visited = new Set<string>([rootTaskId]);
+  const queue: string[] = [rootTaskId];
+  const findDeps = db.prepare<[string], { task_id: string }>(
+    "SELECT d.task_id FROM task_dependencies d JOIN job_tasks t ON t.id = d.task_id WHERE d.depends_on_task_id = ? AND t.status IN ('queued','in_progress')",
+  );
+  const markFailed = db.prepare(
+    `UPDATE job_tasks SET status='failed', error_message=?, finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+     updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), locked_by_worker_id=NULL, lock_expires_at=NULL WHERE id = ?`,
+  );
+  const projOf = db.prepare<[string], { project_id: string | null }>("SELECT project_id FROM job_tasks WHERE id = ?");
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const deps = findDeps.all(cur);
+    for (const d of deps) {
+      if (visited.has(d.task_id)) continue;
+      visited.add(d.task_id);
+      markFailed.run(`Upstream task ${cur} failed: ${reason}`, d.task_id);
+      const pr = projOf.get(d.task_id);
+      if (pr?.project_id) {
+        sseBus.publish(pr.project_id, {
+          type: "task_failed",
+          data: { taskId: d.task_id, errorMessage: `Upstream failed: ${reason}`, cascaded: true },
+        });
+      }
+      queue.push(d.task_id);
+    }
+  }
+}
+
 export function failTask(taskId: string, errorMessage: string, retry = true): void {
   const row = db.prepare<[string], JobTaskRow>("SELECT * FROM job_tasks WHERE id = ?").get(taskId);
   if (!row) return;
@@ -165,6 +195,7 @@ export function failTask(taskId: string, errorMessage: string, retry = true): vo
       `UPDATE job_tasks SET status = 'failed', error_message = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), locked_by_worker_id = NULL, lock_expires_at = NULL WHERE id = ?`,
     ).run(errorMessage, taskId);
+    cascadeFailDependents(taskId, errorMessage);
   }
   if (row.project_id) {
     sseBus.publish(row.project_id, {

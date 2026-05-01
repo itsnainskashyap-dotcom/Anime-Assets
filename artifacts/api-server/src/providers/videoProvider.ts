@@ -1,5 +1,11 @@
+import path from "node:path";
+import { v4 as uuid } from "uuid";
 import { MAGNIFIC_CAPABILITIES } from "./magnificCapabilities.js";
-import { DEMO_MODE, demoResponse, getActiveKey, notConfiguredError } from "./registry.js";
+import { DEMO_MODE, demoResponse } from "./registry.js";
+import { magnificFetch, MagnificError, poll } from "./magnificClient.js";
+import { saveBuffer } from "./storageProvider.js";
+import { logger } from "../lib/logger.js";
+import { safeFetch } from "../lib/safeFetch.js";
 
 export interface VideoTask {
   prompt: string;
@@ -12,6 +18,9 @@ export interface VideoTask {
   referenceVideoUrl?: string;
   webhookUrl?: string;
   elements?: string[];
+  userId?: string;
+  projectId?: string;
+  chunkId?: string;
 }
 
 export interface VideoResponse {
@@ -22,6 +31,15 @@ export interface VideoResponse {
   hiddenModel?: string;
   demo?: boolean;
   raw?: unknown;
+}
+
+interface VideoTaskResponse {
+  data?: {
+    task_id?: string;
+    status?: string;
+    generated?: string[];
+    video_url?: string;
+  };
 }
 
 export function assertPromptLimit(prompt: string): void {
@@ -68,6 +86,24 @@ export function buildReferenceVideoPayload(task: VideoTask): Record<string, unkn
   return body;
 }
 
+async function downloadAndStoreVideo(url: string, opts: {
+  userId: string; projectId: string; chunkId?: string;
+}): Promise<string> {
+  const res = await safeFetch(url);
+  if (!res.ok) throw new Error(`Failed to download video: ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const ext = path.extname(new URL(url).pathname) || ".mp4";
+  const filename = `${opts.chunkId || uuid()}${ext}`;
+  const saved = await saveBuffer(buf, {
+    userId: opts.userId,
+    projectId: opts.projectId,
+    assetType: "videos",
+    filename,
+    contentType: res.headers.get("content-type") || "video/mp4",
+  });
+  return saved.url;
+}
+
 export async function generateVideo(task: VideoTask): Promise<VideoResponse> {
   const isReference = !!task.referenceVideoUrl;
   if (DEMO_MODE) {
@@ -80,17 +116,62 @@ export async function generateVideo(task: VideoTask): Promise<VideoResponse> {
       }),
     };
   }
-  const key = getActiveKey("magnific");
-  if (!key) {
-    throw Object.assign(new Error("Video provider not configured"), {
-      response: notConfiguredError("magnific", isReference ? "reference_to_video" : "text_to_video"),
-      statusCode: 503,
-    });
+  const endpoint = isReference
+    ? MAGNIFIC_CAPABILITIES.referenceVideoEndpoint
+    : MAGNIFIC_CAPABILITIES.standardVideoEndpoint;
+  const body = isReference
+    ? buildReferenceVideoPayload(task)
+    : buildStandardVideoPayload(task);
+
+  const submit = await magnificFetch<VideoTaskResponse>(endpoint, { method: "POST", body });
+  const taskId = submit.data?.task_id;
+
+  let videoUrl: string | undefined =
+    submit.data?.video_url || submit.data?.generated?.[0];
+
+  if (!videoUrl && taskId) {
+    const final = await poll<VideoTaskResponse>(
+      () => magnificFetch<VideoTaskResponse>(`${endpoint}/${taskId}`),
+      (v) => {
+        const s = (v.data?.status || "").toUpperCase();
+        if (s === "COMPLETED") return true;
+        if (s === "FAILED") throw new MagnificError("Video generation failed", 502, v);
+        return !!(v.data?.video_url || (v.data?.generated && v.data.generated.length > 0));
+      },
+      { intervalMs: 8000, timeoutMs: 15 * 60 * 1000 },
+    );
+    videoUrl = final.data?.video_url || final.data?.generated?.[0];
   }
+
+  if (!videoUrl) {
+    return {
+      jobId: taskId,
+      status: "queued",
+      visibleEngine: MAGNIFIC_CAPABILITIES.visibleModelName,
+      hiddenModel: MAGNIFIC_CAPABILITIES.hiddenModelId,
+      raw: submit,
+    };
+  }
+
+  let finalUrl = videoUrl;
+  if (task.userId && task.projectId) {
+    try {
+      finalUrl = await downloadAndStoreVideo(videoUrl, {
+        userId: task.userId,
+        projectId: task.projectId,
+        chunkId: task.chunkId,
+      });
+    } catch (err) {
+      logger.warn({ err, videoUrl }, "Failed to mirror video to local storage; using remote URL");
+    }
+  }
+
   return {
-    status: "queued",
+    jobId: taskId,
+    videoUrl: finalUrl,
+    status: "completed",
     visibleEngine: MAGNIFIC_CAPABILITIES.visibleModelName,
     hiddenModel: MAGNIFIC_CAPABILITIES.hiddenModelId,
-    raw: { stub: true, payload: isReference ? buildReferenceVideoPayload(task) : buildStandardVideoPayload(task) },
+    raw: submit,
   };
 }

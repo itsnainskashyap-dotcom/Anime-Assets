@@ -15,9 +15,9 @@ export interface ProviderKeyRow {
 
 export function getActiveKey(providerName: string): { id: string; key: string } | null {
   const envMap: Record<string, string | undefined> = {
-    anthropic: process.env.ANTHROPIC_API_KEY,
+    anthropic: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY,
     google: process.env.GOOGLE_API_KEY,
-    freepik: process.env.FREEPIK_API_KEY,
+    freepik: process.env.FREEPIK_API_KEY || process.env.MAGNIFIC_API_KEY,
     magnific: process.env.MAGNIFIC_API_KEY,
     razorpay: process.env.RAZORPAY_KEY_SECRET,
   };
