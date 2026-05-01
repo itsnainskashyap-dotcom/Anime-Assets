@@ -15,6 +15,7 @@ import { validateVisual } from "../providers/visionProvider.js";
 import { enqueueTask, enqueueStageOnce, type JobTaskRow } from "../services/queue.js";
 import { saveBuffer, STORAGE_ROOT_PATH } from "../providers/storageProvider.js";
 import { safeFetch } from "../lib/safeFetch.js";
+import { pool } from "../lib/concurrency.js";
 import ffmpegPath from "ffmpeg-static";
 import { compileChunkPrompt } from "../services/promptCompiler.js";
 import { buildVisualizationPack } from "../services/visualizationDirector.js";
@@ -79,10 +80,11 @@ function projectRow(projectId: string): {
   format: string | null;
   genre: string | null;
   voice_style: string | null;
+  estimated_seconds: number | null;
 } | null {
   return db
     .prepare(
-      "SELECT id, user_id, title, story_prompt, format, genre, voice_style FROM projects WHERE id = ?",
+      "SELECT id, user_id, title, story_prompt, format, genre, voice_style, estimated_seconds FROM projects WHERE id = ?",
     )
     .get(projectId) as ReturnType<typeof projectRow>;
 }
@@ -117,7 +119,39 @@ async function handleStoryBible(task: JobTaskRow): Promise<Record<string, unknow
   const genre = project.genre || "shonen";
   const voiceStyle = project.voice_style || "english";
 
-  const targetSeconds = format === "movie" ? 600 : format === "long" ? 300 : 60;
+  // Prefer the exact target the user picked at project creation. Fall back to
+  // a sane per-format default if the column is empty (older projects).
+  const fallbackByFormat = format === "series" ? 10800 : format === "episode" ? 1320 : 180;
+  const targetSeconds = project.estimated_seconds && project.estimated_seconds > 0
+    ? project.estimated_seconds
+    : fallbackByFormat;
+
+  // Scene budget + per-scene duration band scale with the target. The
+  // storyboard step later splits long scenes into 10s video chunks, so a
+  // long per-scene duration is fine — it just produces more chunks.
+  //  • short  (≤180s)   → scenes 5..20s, count 4..15
+  //  • episode(≤1800s)  → scenes 30..90s, count 12..30
+  //  • series (>1800s)  → scenes 60..300s, count 25..40
+  let perSceneMin: number;
+  let perSceneMax: number;
+  let sceneCountMin: number;
+  let sceneCountMax: number;
+  if (targetSeconds <= 180) {
+    perSceneMin = 5; perSceneMax = 20;
+    sceneCountMin = 4; sceneCountMax = 15;
+  } else if (targetSeconds <= 1800) {
+    perSceneMin = 30; perSceneMax = 90;
+    sceneCountMin = 12; sceneCountMax = 30;
+  } else {
+    perSceneMin = 60; perSceneMax = 300;
+    sceneCountMin = 25; sceneCountMax = 40;
+  }
+  // Aim for the target by averaging scenes; constrain to the band.
+  const desiredAvgScene = Math.max(perSceneMin, Math.min(perSceneMax, Math.round(targetSeconds / sceneCountMin)));
+  const sceneBudget = Math.max(sceneCountMin, Math.min(sceneCountMax, Math.round(targetSeconds / desiredAvgScene)));
+  const sceneMin = Math.max(sceneCountMin, sceneBudget - 2);
+  const sceneMax = Math.min(sceneCountMax, sceneBudget + 4);
+  const actMax = targetSeconds <= 120 ? 3 : targetSeconds <= 600 ? 4 : targetSeconds <= 1800 ? 5 : 8;
 
   const { data } = await generateJson<StoryBibleData>({
     systemPrompt:
@@ -135,9 +169,9 @@ ${storyPrompt}
 """
 
 REQUIREMENTS
-- Produce 2–4 acts whose total estimatedDurationSeconds adds up close to ${targetSeconds}.
+- Produce 2–${actMax} acts whose total estimatedDurationSeconds adds up close to ${targetSeconds}.
 - Produce 2–6 named characters with detailed appearance descriptions (hair, eyes, outfit, distinguishing features) — these will be used to lock visual consistency.
-- Produce 4–10 scenes covering the full arc, each with a clear visual summary, shotType (wide/medium/closeup), location, timeOfDay, emotion, and durationSeconds (5–15 each).
+- Produce ${sceneMin}–${sceneMax} scenes covering the full arc, each with a clear visual summary, shotType (wide/medium/closeup), location, timeOfDay, emotion, and durationSeconds (${perSceneMin}–${perSceneMax} each). The sum of scene durationSeconds MUST be within 10% of ${targetSeconds}.
 - Make sceneNumber sequential starting at 1 and assign each to an actNumber.
 - Themes: 2–4 short phrases. Synopsis: exactly 3 sentences.
 
@@ -213,7 +247,7 @@ JSON SCHEMA
         s.title || `Scene ${s.sceneNumber}`,
         s.summary || "",
         s.shotType || "medium",
-        Math.max(5, Math.min(15, s.durationSeconds || 10)),
+        Math.max(perSceneMin, Math.min(perSceneMax, s.durationSeconds || perSceneMin)),
         s.emotion || null,
       );
     }
@@ -283,54 +317,125 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
   }
 
   const animeStyle = project.genre || "modern anime";
-  const generated: { id: string; name: string; portraitUrl: string }[] = [];
-  let attempted = 0;
-  let portraitFailures = 0;
+  const publicBase = process.env.PUBLIC_BASE_URL || "";
+  // Convert a stored asset URL into something the upstream image API can
+  // actually fetch. If PUBLIC_BASE_URL isn't set, relative /storage/ paths
+  // are useless to the upstream service — drop them rather than passing a
+  // broken reference and silently degrading consistency.
+  const toAbsoluteUrl = (u: string | null): string | null => {
+    if (!u) return null;
+    if (u.startsWith("http")) return u;
+    if (u.startsWith("/storage/")) return publicBase ? `${publicBase}${u}` : null;
+    return null;
+  };
 
-  for (const char of characters) {
-    if (char.portrait_url) continue;
-    attempted++;
+  const generated: { id: string; name: string; portraitUrl: string }[] = [];
+  let portraitFailures = 0;
+  const todo = characters.filter((c) => !c.portrait_url);
+  const attempted = todo.length;
+
+  if (attempted === 0) {
     recordAgentLog({
       projectId: task.project_id,
       agentName: "character_director",
-      message: `Designing visual sheet for ${char.name}…`,
+      message: "All characters already have portraits — skipping image generation.",
     });
+  } else {
+    recordAgentLog({
+      projectId: task.project_id,
+      agentName: "character_director",
+      message: `Designing visual sheets for ${attempted} character(s) in parallel…`,
+    });
+  }
+
+  // ── PHASE 1: portraits in parallel (no reference image yet) ──────────
+  // Concurrency capped at 4 to stay friendly to the upstream image API.
+  const PORTRAIT_CONCURRENCY = 4;
+  const portraitResults = await pool(todo, PORTRAIT_CONCURRENCY, async (char) => {
     const appearance = char.appearance_json ? JSON.parse(char.appearance_json) : {};
     const sharedDesc = `${animeStyle} anime style, ${char.name}, ${char.role || "supporting character"}. Hair: ${appearance.hairColor || "dark"} ${appearance.hairStyle || ""}. Eyes: ${appearance.eyeColor || "expressive"}. Skin: ${appearance.skinTone || "natural"}. Build: ${appearance.build || "average"}. Outfit: ${appearance.outfit || "signature outfit"}. Distinguishing: ${appearance.distinguishingFeatures || ""}. Cinematic lighting, sharp linework, high quality cel-shading, no text, character isolated on neutral background.`;
+    try {
+      const img = await generateImage({
+        prompt: `${sharedDesc} expressive portrait, head and shoulders, looking forward.`,
+        aspectRatio: "1:1",
+        userId: task.user_id!,
+        projectId: task.project_id!,
+        assetType: `characters/${char.id}`,
+        filename: "portrait_url.png",
+      });
+      db.prepare(
+        "UPDATE characters SET portrait_url = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+      ).run(img.url, char.id);
+      recordPlaygroundEvent({
+        projectId: task.project_id!,
+        eventType: "character_image_ready",
+        agent: "character_director",
+        message: `${char.name}: portrait ready.`,
+        payload: { characterId: char.id, field: "portrait_url", url: img.url },
+      });
+      generated.push({ id: char.id, name: char.name, portraitUrl: img.url });
+      return { char, sharedDesc, portraitUrl: img.url };
+    } catch (err) {
+      logger.error({ err, characterId: char.id, angle: "portrait_url" }, "Character portrait generation failed");
+      portraitFailures++;
+      return null;
+    }
+  });
 
-    const angles: Array<{ field: "portrait_url" | "model_sheet_front_url" | "model_sheet_three_quarter_url" | "model_sheet_back_url"; label: string; aspect: string; }> = [
-      { field: "portrait_url", label: "expressive portrait, head and shoulders, looking forward", aspect: "1:1" },
-      { field: "model_sheet_front_url", label: "full body model sheet, front view, neutral pose, standing", aspect: "9:16" },
-      { field: "model_sheet_three_quarter_url", label: "full body model sheet, three-quarter side view, neutral pose", aspect: "9:16" },
-      { field: "model_sheet_back_url", label: "full body model sheet, back view, neutral pose", aspect: "9:16" },
+  // ── PHASE 2: 3 model-sheet angles per character, in parallel, ALL using
+  // the just-generated portrait_url as reference for visual consistency.
+  // Total in-flight = portraitsReady * 3, so cap pool size at 6 to keep
+  // upstream load reasonable.
+  type SheetJob = {
+    charId: string;
+    name: string;
+    field: "model_sheet_front_url" | "model_sheet_three_quarter_url" | "model_sheet_back_url";
+    label: string;
+    aspect: string;
+    sharedDesc: string;
+    referenceUrls: string[];
+  };
+  const sheetJobs: SheetJob[] = [];
+  for (const r of portraitResults) {
+    if (!r) continue;
+    const refUrl = toAbsoluteUrl(r.portraitUrl);
+    const referenceUrls = refUrl ? [refUrl] : [];
+    const baseSheets: Array<Omit<SheetJob, "charId" | "name" | "sharedDesc" | "referenceUrls">> = [
+      { field: "model_sheet_front_url", label: "full body model sheet, front view, neutral pose, standing, EXACT same face, hair, outfit, and proportions as reference portrait", aspect: "9:16" },
+      { field: "model_sheet_three_quarter_url", label: "full body model sheet, three-quarter side view, neutral pose, EXACT same face, hair, outfit, and proportions as reference portrait", aspect: "9:16" },
+      { field: "model_sheet_back_url", label: "full body model sheet, back view, neutral pose, EXACT same hair, outfit, and proportions as reference portrait", aspect: "9:16" },
     ];
-
-    for (const a of angles) {
-      const prompt = `${sharedDesc} ${a.label}.`;
-      try {
-        const img = await generateImage({
-          prompt,
-          aspectRatio: a.aspect,
-          userId: task.user_id,
-          projectId: task.project_id,
-          assetType: `characters/${char.id}`,
-          filename: `${a.field}.png`,
-        });
-        db.prepare(`UPDATE characters SET ${a.field} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`).run(img.url, char.id);
-        recordPlaygroundEvent({
-          projectId: task.project_id,
-          eventType: "character_image_ready",
-          agent: "character_director",
-          message: `${char.name}: ${a.field.replace(/_url$/, "").replace(/_/g, " ")} ready.`,
-          payload: { characterId: char.id, field: a.field, url: img.url },
-        });
-        if (a.field === "portrait_url") generated.push({ id: char.id, name: char.name, portraitUrl: img.url });
-      } catch (err) {
-        logger.error({ err, characterId: char.id, angle: a.field }, "Character image generation failed");
-        if (a.field === "portrait_url") portraitFailures++;
-      }
+    for (const s of baseSheets) {
+      sheetJobs.push({ ...s, charId: r.char.id, name: r.char.name, sharedDesc: r.sharedDesc, referenceUrls });
     }
   }
+
+  const SHEET_CONCURRENCY = 6;
+  await pool(sheetJobs, SHEET_CONCURRENCY, async (job) => {
+    try {
+      const img = await generateImage({
+        prompt: `${job.sharedDesc} ${job.label}.`,
+        aspectRatio: job.aspect,
+        referenceUrls: job.referenceUrls,
+        userId: task.user_id!,
+        projectId: task.project_id!,
+        assetType: `characters/${job.charId}`,
+        filename: `${job.field}.png`,
+      });
+      db.prepare(
+        `UPDATE characters SET ${job.field} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+      ).run(img.url, job.charId);
+      recordPlaygroundEvent({
+        projectId: task.project_id!,
+        eventType: "character_image_ready",
+        agent: "character_director",
+        message: `${job.name}: ${job.field.replace(/_url$/, "").replace(/_/g, " ")} ready.`,
+        payload: { characterId: job.charId, field: job.field, url: img.url },
+      });
+    } catch (err) {
+      logger.error({ err, characterId: job.charId, angle: job.field }, "Character model-sheet generation failed");
+    }
+  });
 
   if (attempted > 0 && generated.length === 0) {
     throw new Error(
@@ -475,10 +580,14 @@ async function handleVisualization(task: JobTaskRow): Promise<Record<string, unk
   const animeStyle = project.genre || "modern anime";
   let scenesWithFrames = 0;
 
-  for (const [idx, scene] of scenes.entries()) {
+  // Build packs in parallel batches. Each scene internally already
+  // parallelizes its 6 image calls, so cap scene-level concurrency to 2 to
+  // avoid overwhelming the upstream image API (peak in-flight ~12 images).
+  const SCENE_CONCURRENCY = 2;
+  await pool(scenes, SCENE_CONCURRENCY, async (scene, idx) => {
     const pack = await buildVisualizationPack({
-      projectId: task.project_id,
-      userId: task.user_id,
+      projectId: task.project_id!,
+      userId: task.user_id!,
       scene,
       characterRefs: charRefs,
       animeStyle,
@@ -509,7 +618,7 @@ async function handleVisualization(task: JobTaskRow): Promise<Record<string, unk
         c.id,
       );
     }
-  }
+  });
 
   if (scenes.length > 0 && scenesWithFrames === 0) {
     throw new Error(

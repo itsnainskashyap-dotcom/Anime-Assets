@@ -160,3 +160,35 @@ api-server artifact intentionally diverges from the workspace defaults:
   manual click after completion legitimately starts a new run. Race-free
   in our single-Node + better-sqlite (synchronous) runtime; would need a
   DB-level uniqueness constraint if horizontally scaled.
+- **Exact-duration selector + parallelized image generation**
+  (`routes/projects.ts`, `jobs/handlers.ts`, `services/visualizationDirector.ts`,
+  `lib/concurrency.ts`, `pages/app/CreateProject.tsx`):
+  - The wizard now exposes per-format duration buttons
+    (short: 1/2/3 min · episode: 20/22/24 min · series: 3–6 episodes)
+    with per-option credit cost. The chosen `targetSeconds` is sent
+    on POST and persisted to `projects.estimated_seconds`. The route
+    also accepts both `genres[]`/`genre` and `voice`/`voiceStyle`
+    aliases — earlier the wizard's `genres` array was silently
+    dropped, leaving every project with `genre=null`.
+  - `handleStoryBible` reads `estimated_seconds` and derives a
+    target-aware scene plan: `short ≤180s` → 5–20 s × 4–15 scenes;
+    `episode ≤1800s` → 30–90 s × 12–30 scenes; `series >1800s` →
+    60–300 s × 25–40 scenes. The Claude prompt and the DB scene-insert
+    clamp both use the band, so the planner can actually hit the
+    requested target. The route caps `targetSeconds` at 12000 (the
+    band ceiling).
+  - `lib/concurrency.ts` exports `pool(items, limit, fn)` — a tiny
+    bounded-concurrency runner. `handleCharacterGenerate` runs
+    portraits in a 4-wide pool; then 3 model-sheet angles per
+    character in a 6-wide pool, each one passing the just-generated
+    portrait as `referenceUrls` so face/outfit stay on-model across
+    angles. `handleVisualization` runs scenes in a 2-wide pool, and
+    `buildVisualizationPack` does Wave 1 (`seed_frame` + `start_frame`
+    in parallel) then Wave 2 (`end_frame`/`scene_board`/`element_1`/
+    `element_2` in parallel), all of Wave 2 anchored to `start_frame`
+    so the scene's environment, lighting, and palette stay consistent
+    across all six images.
+  - `toAbsoluteUrl(...)` in both handlers and visualizationDirector
+    drops `/storage/...` refs when `PUBLIC_BASE_URL` is unset —
+    passing a relative URL the upstream image API can't fetch was
+    silently degrading consistency.

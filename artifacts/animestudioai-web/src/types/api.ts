@@ -31,10 +31,14 @@ export interface Project {
 export interface CreateProjectInput {
   title: string;
   format: string;
-  genres: string[];
-  voice: string;
+  // Wizard sends both shapes for back-compat with the API.
+  genre?: string;
+  genres?: string[];
+  voice?: string;
+  voiceStyle?: string;
   storyPrompt: string;
   durationLabel: string;
+  targetSeconds: number;
 }
 
 export interface Chunk {

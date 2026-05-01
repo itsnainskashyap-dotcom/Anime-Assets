@@ -35,16 +35,17 @@ interface RunOpts {
 
 async function tryImage(
   label: string,
-  base: { userId: string; projectId: string; sceneId: string; charRefs: string[] },
+  base: { userId: string; projectId: string; sceneId: string },
   promptSuffix: string,
   filename: string,
+  referenceUrls: string[],
   aspect = "16:9",
 ): Promise<string | null> {
   try {
     const r = await generateImage({
       prompt: promptSuffix,
       aspectRatio: aspect,
-      referenceUrls: base.charRefs.slice(0, 3),
+      referenceUrls: referenceUrls.slice(0, 3),
       userId: base.userId,
       projectId: base.projectId,
       assetType: `scenes/${base.sceneId}`,
@@ -57,16 +58,30 @@ async function tryImage(
   }
 }
 
+function toAbsoluteUrl(u: string | null): string | null {
+  if (!u) return null;
+  if (u.startsWith("http")) return u;
+  const publicBase = process.env.PUBLIC_BASE_URL || "";
+  // Without PUBLIC_BASE_URL the upstream image API cannot fetch /storage/
+  // assets, so the reference would be silently useless. Drop it instead
+  // of degrading quality invisibly — char refs alone will be used.
+  if (u.startsWith("/storage/")) return publicBase ? `${publicBase}${u}` : null;
+  return null;
+}
+
 /**
  * Generate the full V17 visualization pack for a single scene:
  * (optionally) seed_frame, start_frame, end_frame, scene_board, element_1, element_2.
  *
- * Each is a DISTINCT image generation call so element images differ from
- * the start/end frames.
+ * Wave 1 (parallel): seed_frame (first scene only) + start_frame.
+ *   start_frame is the visual anchor for the rest of the scene.
+ * Wave 2 (parallel): end_frame, scene_board, element_1, element_2 — all
+ *   anchored to the just-rendered start_frame so backgrounds and palette
+ *   stay consistent across all 6 images of the same scene.
  */
 export async function buildVisualizationPack(opts: RunOpts): Promise<VisualizationPack> {
   const { projectId, userId, scene, characterRefs, animeStyle, isFirstScene } = opts;
-  const base = { userId, projectId, sceneId: scene.id, charRefs: characterRefs };
+  const base = { userId, projectId, sceneId: scene.id };
   const sceneSummary = (scene.description || scene.title || "").trim();
   const shot = scene.shot_type || "medium";
   const emotion = scene.emotion || "cinematic";
@@ -78,55 +93,72 @@ export async function buildVisualizationPack(opts: RunOpts): Promise<Visualizati
     message: `Generating visualization pack for scene ${scene.scene_number}…`,
   });
 
-  // Seed frame only for first scene of project (style anchor for the whole show).
-  let seedFrameUrl: string | null = null;
+  // ── WAVE 1: seed_frame (optional, first scene only) + start_frame ──
+  // start_frame uses the character refs so faces stay on-model for this
+  // scene's actors. seed_frame is a free-standing style anchor.
+  const wave1: Array<Promise<{ key: "seed" | "start"; url: string | null }>> = [];
   if (isFirstScene) {
-    seedFrameUrl = await tryImage(
-      "seed_frame",
-      base,
-      `${stylePrefix} STYLE SEED FRAME for the entire production. Establish the master visual signature: palette, lighting, character ink-line weight. Hero composition. ${sceneSummary}`,
-      "seed_frame.png",
+    wave1.push(
+      tryImage(
+        "seed_frame",
+        base,
+        `${stylePrefix} STYLE SEED FRAME for the entire production. Establish the master visual signature: palette, lighting, character ink-line weight. Hero composition. ${sceneSummary}`,
+        "seed_frame.png",
+        characterRefs,
+      ).then((url) => ({ key: "seed" as const, url })),
     );
   }
-
-  const startFrameUrl = await tryImage(
-    "start_frame",
-    base,
-    `${stylePrefix} ${shot} shot, mood: ${emotion}. OPENING FRAME of scene ${scene.scene_number}. ${sceneSummary} Composition optimized as the first frame the camera holds on.`,
-    "start_frame.png",
+  wave1.push(
+    tryImage(
+      "start_frame",
+      base,
+      `${stylePrefix} ${shot} shot, mood: ${emotion}. OPENING FRAME of scene ${scene.scene_number}. ${sceneSummary} Composition optimized as the first frame the camera holds on. Establish the scene's environment, lighting and color palette clearly.`,
+      "start_frame.png",
+      characterRefs,
+    ).then((url) => ({ key: "start" as const, url })),
   );
+  const wave1Results = await Promise.all(wave1);
+  const seedFrameUrl = wave1Results.find((r) => r.key === "seed")?.url ?? null;
+  const startFrameUrl = wave1Results.find((r) => r.key === "start")?.url ?? null;
 
-  const endFrameUrl = await tryImage(
-    "end_frame",
-    base,
-    `${stylePrefix} ${shot} shot, mood: ${emotion}. CLOSING FRAME of scene ${scene.scene_number}, slightly later moment than the opening, showing the action's natural evolution. ${sceneSummary}`,
-    "end_frame.png",
-  );
+  // start_frame is the anchor for everything else in this scene so that
+  // backgrounds, lighting, and character placement stay coherent.
+  const sceneAnchor = toAbsoluteUrl(startFrameUrl);
+  const wave2Refs = [sceneAnchor, ...characterRefs].filter((u): u is string => Boolean(u));
 
-  const sceneBoardUrl = await tryImage(
-    "scene_board",
-    base,
-    `${stylePrefix} STORYBOARD PANEL — wide composition map of scene ${scene.scene_number}, showing camera blocking, character placement, and environment layout. Annotated-storyboard style with implied camera direction. ${sceneSummary}`,
-    "scene_board.png",
-  );
-
-  // Two element images: distinct supporting visuals (not the start/end frames),
-  // useful as parallel references for the video model.
-  const element1Url = await tryImage(
-    "element_1",
-    base,
-    `${stylePrefix} CLOSE-UP DETAIL ELEMENT for scene ${scene.scene_number}. Single hero prop or character detail in isolation, shot tight. ${sceneSummary}`,
-    "element_1.png",
-    "1:1",
-  );
-
-  const element2Url = await tryImage(
-    "element_2",
-    base,
-    `${stylePrefix} ENVIRONMENT ELEMENT for scene ${scene.scene_number}. Background plate without main characters: location, atmosphere, lighting. ${sceneSummary}`,
-    "element_2.png",
-    "16:9",
-  );
+  // ── WAVE 2: end_frame, scene_board, element_1, element_2 in parallel ──
+  const [endFrameUrl, sceneBoardUrl, element1Url, element2Url] = await Promise.all([
+    tryImage(
+      "end_frame",
+      base,
+      `${stylePrefix} ${shot} shot, mood: ${emotion}. CLOSING FRAME of scene ${scene.scene_number}, slightly later moment than the opening. EXACT same environment, lighting, palette and characters as the reference (start frame). ${sceneSummary}`,
+      "end_frame.png",
+      wave2Refs,
+    ),
+    tryImage(
+      "scene_board",
+      base,
+      `${stylePrefix} STORYBOARD PANEL — wide composition map of scene ${scene.scene_number}, showing camera blocking, character placement, and environment layout. SAME environment, lighting and palette as reference. ${sceneSummary}`,
+      "scene_board.png",
+      wave2Refs,
+    ),
+    tryImage(
+      "element_1",
+      base,
+      `${stylePrefix} CLOSE-UP DETAIL ELEMENT for scene ${scene.scene_number}. Single hero prop or character detail in isolation, shot tight. SAME palette and lighting as reference. ${sceneSummary}`,
+      "element_1.png",
+      wave2Refs,
+      "1:1",
+    ),
+    tryImage(
+      "element_2",
+      base,
+      `${stylePrefix} ENVIRONMENT ELEMENT for scene ${scene.scene_number}. Background plate without main characters: location, atmosphere, lighting. EXACT same environment as reference (start frame). ${sceneSummary}`,
+      "element_2.png",
+      wave2Refs,
+      "16:9",
+    ),
+  ]);
 
   // Persist into scene_visualizations.
   const sv = db

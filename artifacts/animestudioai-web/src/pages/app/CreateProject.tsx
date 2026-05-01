@@ -17,6 +17,27 @@ const FORMATS = [
   { id: "series", label: "Mini Series", duration: "3-6 episodes", credits: 10000, desc: "A continuing narrative arc." },
 ];
 
+// Exact-duration choices per format. `seconds` is what the backend uses to
+// build the story bible's scene budget.
+const DURATION_OPTIONS: Record<string, { label: string; seconds: number; credits: number }[]> = {
+  short: [
+    { label: "1 minute",  seconds: 60,  credits: 250 },
+    { label: "2 minutes", seconds: 120, credits: 400 },
+    { label: "3 minutes", seconds: 180, credits: 500 },
+  ],
+  episode: [
+    { label: "20 minutes", seconds: 1200, credits: 2200 },
+    { label: "22 minutes", seconds: 1320, credits: 2500 },
+    { label: "24 minutes", seconds: 1440, credits: 2800 },
+  ],
+  series: [
+    { label: "3 episodes (~66 min)",  seconds: 3960,  credits: 7000 },
+    { label: "4 episodes (~88 min)",  seconds: 5280,  credits: 9000 },
+    { label: "5 episodes (~110 min)", seconds: 6600,  credits: 11000 },
+    { label: "6 episodes (~132 min)", seconds: 7920,  credits: 13000 },
+  ],
+};
+
 const GENRES = [
   "Action", "Adventure", "Fantasy", "Sci-Fi", "Cyberpunk", "Slice of Life",
   "Romance", "Drama", "Mecha", "Mystery", "Horror", "Psychological"
@@ -38,7 +59,8 @@ export default function CreateProject() {
   const [formData, setFormData] = useState({
     title: "",
     format: "short",
-    durationLabel: "1-3 mins",
+    durationLabel: "3 minutes",
+    targetSeconds: 180,
     genres: [] as string[],
     voice: "cinematic",
     storyPrompt: "",
@@ -68,7 +90,20 @@ export default function CreateProject() {
 
   const handleSubmit = async () => {
     try {
-      const res = await createProject.mutateAsync(formData);
+      // Send the field names the backend actually reads: `genre` (joined),
+      // `voiceStyle`, plus the exact target duration.
+      const payload = {
+        title: formData.title,
+        format: formData.format,
+        genre: formData.genres.join(", "),
+        genres: formData.genres,
+        voiceStyle: formData.voice,
+        voice: formData.voice,
+        storyPrompt: formData.storyPrompt,
+        durationLabel: formData.durationLabel,
+        targetSeconds: formData.targetSeconds,
+      };
+      const res = await createProject.mutateAsync(payload);
       // Auto-kick the full autonomous pipeline: story → chars → storyboard → visualization
       await api(`/api/projects/${res.id}/story-bible/generate`, { method: "POST" }).catch(() => {});
       setLocation(`/app/projects/${res.id}/story`);
@@ -106,9 +141,15 @@ export default function CreateProject() {
                     <div 
                       key={f.id}
                       className={`relative flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-colors ${formData.format === f.id ? 'border-primary bg-primary/5' : 'border-border bg-card hover:border-primary/50'}`}
+                      data-testid={`format-${f.id}`}
                       onClick={() => {
-                        updateForm("format", f.id);
-                        updateForm("durationLabel", f.duration);
+                        const def = (DURATION_OPTIONS[f.id] || [])[0];
+                        setFormData(prev => ({
+                          ...prev,
+                          format: f.id,
+                          durationLabel: def?.label ?? f.duration,
+                          targetSeconds: def?.seconds ?? prev.targetSeconds,
+                        }));
                       }}
                     >
                       <div className={`mt-1 w-5 h-5 rounded-full border flex items-center justify-center ${formData.format === f.id ? 'border-primary' : 'border-muted-foreground'}`}>
@@ -122,6 +163,33 @@ export default function CreateProject() {
                         <p className="text-sm text-muted-foreground">{f.desc}</p>
                       </div>
                     </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-4">
+                <Label>Exact Duration</Label>
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Pick the precise length — the AI Director will scale the scene count and pacing to match.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {(DURATION_OPTIONS[formData.format] || []).map(d => (
+                    <button
+                      key={d.seconds}
+                      type="button"
+                      data-testid={`duration-${d.seconds}`}
+                      onClick={() => setFormData(prev => ({
+                        ...prev,
+                        durationLabel: d.label,
+                        targetSeconds: d.seconds,
+                      }))}
+                      className={`px-3 py-3 rounded-lg border-2 text-sm font-medium transition-colors text-left ${formData.targetSeconds === d.seconds ? 'border-primary bg-primary/5 text-foreground' : 'border-border bg-card hover:border-primary/50 text-foreground'}`}
+                    >
+                      <div className="font-semibold">{d.label}</div>
+                      <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" /> {d.credits.toLocaleString()}
+                      </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -246,7 +314,9 @@ export default function CreateProject() {
     return false;
   };
 
-  const estCredits = FORMATS.find(f => f.id === formData.format)?.credits || 0;
+  const estCredits =
+    (DURATION_OPTIONS[formData.format] || []).find(d => d.seconds === formData.targetSeconds)?.credits ??
+    FORMATS.find(f => f.id === formData.format)?.credits ?? 0;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full h-full flex flex-col md:flex-row gap-8">

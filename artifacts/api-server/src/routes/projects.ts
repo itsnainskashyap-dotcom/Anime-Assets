@@ -33,15 +33,59 @@ function notFound(res: Response): void {
 
 router.post("/", requireAuth, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
-  const { title, format, genre, voiceStyle, storyPrompt } = req.body || {};
-  if (!title) {
+  const body = (req.body || {}) as {
+    title?: string;
+    format?: string;
+    // Accept both singular and array forms from the wizard.
+    genre?: string;
+    genres?: string[];
+    // Accept both `voice` and `voiceStyle` for back-compat.
+    voice?: string;
+    voiceStyle?: string;
+    storyPrompt?: string;
+    targetSeconds?: number;
+    targetMinutes?: number;
+  };
+  if (!body.title) {
     res.status(400).json({ error: "title required" });
     return;
   }
   const id = uuid();
+  const genreValue =
+    body.genre ??
+    (Array.isArray(body.genres) && body.genres.length > 0 ? body.genres.join(", ") : null);
+  const voiceValue = body.voiceStyle ?? body.voice ?? null;
+  // Resolve the production-target duration in seconds. The wizard sends one of:
+  //   - targetSeconds (preferred, exact)
+  //   - targetMinutes (will be converted)
+  //   - format only — fallback to a sane default per format band:
+  //       short=180s (3 min), episode=1320s (22 min), series=10800s (~3hr)
+  let targetSeconds = 0;
+  if (typeof body.targetSeconds === "number" && body.targetSeconds > 0) {
+    targetSeconds = Math.round(body.targetSeconds);
+  } else if (typeof body.targetMinutes === "number" && body.targetMinutes > 0) {
+    targetSeconds = Math.round(body.targetMinutes * 60);
+  } else {
+    const f = (body.format || "short").toLowerCase();
+    targetSeconds = f === "series" ? 10800 : f === "episode" ? 1320 : 180;
+  }
+  // Clamp to the satisfiable range. Story-bible scene-band math currently
+  // tops out at 40 scenes × 300s = 12000s; clamp accordingly so the user
+  // can never request a target the planner can't produce.
+  targetSeconds = Math.max(10, Math.min(12000, targetSeconds));
+
   db.prepare(
-    "INSERT INTO projects (id, user_id, title, format, genre, voice_style, story_prompt) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(id, u.sub, title, format ?? null, genre ?? null, voiceStyle ?? null, storyPrompt ?? null);
+    "INSERT INTO projects (id, user_id, title, format, genre, voice_style, story_prompt, estimated_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    id,
+    u.sub,
+    body.title,
+    body.format ?? null,
+    genreValue,
+    voiceValue,
+    body.storyPrompt ?? null,
+    targetSeconds,
+  );
   db.prepare("INSERT INTO project_settings (project_id) VALUES (?)").run(id);
   loadMemory(id);
   res.status(201).json(loadProject(id, u.sub));
