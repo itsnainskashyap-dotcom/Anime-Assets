@@ -19,7 +19,7 @@ export function adjustCredits(
 ): { balance: number } {
   const tx = db.transaction((uid: string, d: number) => {
     const cur = db.prepare<[string], { credits: number }>("SELECT credits FROM users WHERE id = ?").get(uid);
-    if (!cur) throw new Error("User not found");
+    if (!cur) throw Object.assign(new Error("User not found"), { statusCode: 404 });
     const next = cur.credits + d;
     if (next < 0) throw Object.assign(new Error("Insufficient credits"), { statusCode: 402 });
     db.prepare("UPDATE users SET credits = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(next, uid);

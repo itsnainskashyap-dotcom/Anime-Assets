@@ -41,16 +41,22 @@ function clean(value: unknown, depth: number): unknown {
  * `req.query`, and `req.params`. This is a defence-in-depth layer applied to
  * every request before route handlers see it.
  */
+function sanitizeStringMap(target: Record<string, unknown>): void {
+  const cleaned = clean(target, 0) as Record<string, unknown>;
+  for (const k of Object.keys(target)) {
+    if (cleaned[k] !== undefined) target[k] = cleaned[k];
+  }
+}
+
 export function sanitizeRequests(req: Request, _res: Response, next: NextFunction): void {
   if (req.body && typeof req.body === "object") {
     req.body = clean(req.body, 0);
   }
   if (req.params && typeof req.params === "object") {
-    const p = clean(req.params, 0) as Record<string, string>;
-    for (const k of Object.keys(req.params)) {
-      const v = p[k];
-      if (typeof v === "string") (req.params as Record<string, string>)[k] = v;
-    }
+    sanitizeStringMap(req.params as unknown as Record<string, unknown>);
+  }
+  if (req.query && typeof req.query === "object") {
+    sanitizeStringMap(req.query as unknown as Record<string, unknown>);
   }
   next();
 }

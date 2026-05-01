@@ -1,0 +1,13 @@
+# Build output
+dist/
+
+# Local SQLite database & WAL artifacts (created at runtime; never commit)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local file storage written by the storageProvider at runtime
+storage/

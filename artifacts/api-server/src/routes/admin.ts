@@ -8,9 +8,27 @@ import { adjustCredits } from "../services/credits.js";
 
 const router: IRouter = Router();
 
+// Baseline: must be authenticated AND flagged as admin. Specific role checks
+// are applied per route below so finance/ops/support roles cannot perform
+// actions outside their remit. super_admin bypasses every check.
 router.use(requireAuth, requireAdmin(), adminLimiter);
 
-router.get("/dashboard", (_req, res) => {
+const READ_ROLES = [
+  "read_only_admin",
+  "support_admin",
+  "operations_admin",
+  "finance_admin",
+] as const;
+const OPS_ROLES = ["operations_admin"] as const;
+const FINANCE_ROLES = ["finance_admin"] as const;
+const SUPPORT_ROLES = ["support_admin", "operations_admin", "finance_admin"] as const;
+
+const requireRead = requireAdmin(...READ_ROLES);
+const requireOps = requireAdmin(...OPS_ROLES);
+const requireFinance = requireAdmin(...FINANCE_ROLES);
+const requireSupport = requireAdmin(...SUPPORT_ROLES);
+
+router.get("/dashboard", requireRead, (_req, res) => {
   const stats = {
     users: (db.prepare("SELECT COUNT(*) AS c FROM users").get() as { c: number }).c,
     projects: (db.prepare("SELECT COUNT(*) AS c FROM projects").get() as { c: number }).c,
@@ -29,18 +47,18 @@ router.get("/dashboard", (_req, res) => {
   res.json({ stats, recentJobs, providerHealth });
 });
 
-router.get("/users", (_req, res) => {
+router.get("/users", requireSupport, (_req, res) => {
   const users = db
     .prepare("SELECT id, email, display_name, credits, plan, is_admin, created_at FROM users ORDER BY created_at DESC LIMIT 200")
     .all();
   res.json(users);
 });
 
-router.get("/projects", (_req, res) => {
+router.get("/projects", requireSupport, (_req, res) => {
   res.json(db.prepare("SELECT * FROM projects ORDER BY created_at DESC LIMIT 200").all());
 });
 
-router.get("/jobs", (req, res) => {
+router.get("/jobs", requireRead, (req, res) => {
   const status = (req.query.status as string) || null;
   const stmt = status
     ? db.prepare("SELECT * FROM job_tasks WHERE status = ? ORDER BY created_at DESC LIMIT 200")
@@ -48,7 +66,7 @@ router.get("/jobs", (req, res) => {
   res.json(status ? stmt.all(status) : stmt.all());
 });
 
-router.post("/jobs/:id/retry", adminAudit("job_retry", "job_tasks"), (req, res) => {
+router.post("/jobs/:id/retry", requireOps, adminAudit("job_retry", "job_tasks"), (req, res) => {
   const r = db
     .prepare(
       "UPDATE job_tasks SET status='queued', locked_by_worker_id=NULL, lock_expires_at=NULL, retry_count=retry_count+1, scheduled_for=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
@@ -57,29 +75,29 @@ router.post("/jobs/:id/retry", adminAudit("job_retry", "job_tasks"), (req, res) 
   res.json({ ok: r.changes > 0 });
 });
 
-router.post("/jobs/:id/cancel", adminAudit("job_cancel", "job_tasks"), (req, res) => {
+router.post("/jobs/:id/cancel", requireOps, adminAudit("job_cancel", "job_tasks"), (req, res) => {
   db.prepare("UPDATE job_tasks SET status='cancelled' WHERE id = ?").run((req.params.id as string));
   res.json({ ok: true });
 });
 
-router.post("/jobs/:id/pause", adminAudit("job_pause", "job_tasks"), (req, res) => {
+router.post("/jobs/:id/pause", requireOps, adminAudit("job_pause", "job_tasks"), (req, res) => {
   db.prepare("UPDATE job_tasks SET status='paused' WHERE id = ? AND status IN ('queued','in_progress')").run((req.params.id as string));
   res.json({ ok: true });
 });
 
-router.post("/jobs/:id/resume", adminAudit("job_resume", "job_tasks"), (req, res) => {
+router.post("/jobs/:id/resume", requireOps, adminAudit("job_resume", "job_tasks"), (req, res) => {
   db.prepare("UPDATE job_tasks SET status='queued' WHERE id = ? AND status='paused'").run((req.params.id as string));
   res.json({ ok: true });
 });
 
-router.get("/provider-keys", (_req, res) => {
+router.get("/provider-keys", requireRead, (_req, res) => {
   const rows = db
     .prepare("SELECT id, provider_name, label, masked_key, enabled, priority, status, last_success_at, last_failure_at, error_count, created_at FROM provider_keys ORDER BY provider_name, priority DESC")
     .all();
   res.json(rows);
 });
 
-router.post("/provider-keys", adminAudit("provider_key_add", "provider_keys"), (req, res) => {
+router.post("/provider-keys", requireOps, adminAudit("provider_key_add", "provider_keys"), (req, res) => {
   const { providerName, label, key, priority } = req.body || {};
   if (!providerName || !key) {
     res.status(400).json({ error: "providerName and key required" });
@@ -92,7 +110,7 @@ router.post("/provider-keys", adminAudit("provider_key_add", "provider_keys"), (
   res.status(201).json({ id, masked: maskKey(key) });
 });
 
-router.patch("/provider-keys/:id", adminAudit("provider_key_update", "provider_keys"), (req, res) => {
+router.patch("/provider-keys/:id", requireOps, adminAudit("provider_key_update", "provider_keys"), (req, res) => {
   const { label, priority, key } = req.body || {};
   const updates: string[] = [];
   const args: unknown[] = [];
@@ -108,7 +126,7 @@ router.patch("/provider-keys/:id", adminAudit("provider_key_update", "provider_k
   res.json({ ok: true });
 });
 
-router.post("/provider-keys/:id/test", adminAudit("provider_key_test", "provider_keys"), (req, res) => {
+router.post("/provider-keys/:id/test", requireOps, adminAudit("provider_key_test", "provider_keys"), (req, res) => {
   const id = (req.params.id as string);
   const key = db.prepare("SELECT id, provider_name FROM provider_keys WHERE id = ?").get(id);
   if (!key) {
@@ -123,17 +141,17 @@ router.post("/provider-keys/:id/test", adminAudit("provider_key_test", "provider
   res.json({ ok: true, testId, status: "ok" });
 });
 
-router.post("/provider-keys/:id/enable", adminAudit("provider_key_enable", "provider_keys"), (req, res) => {
+router.post("/provider-keys/:id/enable", requireOps, adminAudit("provider_key_enable", "provider_keys"), (req, res) => {
   db.prepare("UPDATE provider_keys SET enabled=1 WHERE id = ?").run((req.params.id as string));
   res.json({ ok: true });
 });
 
-router.post("/provider-keys/:id/disable", adminAudit("provider_key_disable", "provider_keys"), (req, res) => {
+router.post("/provider-keys/:id/disable", requireOps, adminAudit("provider_key_disable", "provider_keys"), (req, res) => {
   db.prepare("UPDATE provider_keys SET enabled=0 WHERE id = ?").run((req.params.id as string));
   res.json({ ok: true });
 });
 
-router.post("/provider-keys/:id/set-priority", adminAudit("provider_key_priority", "provider_keys"), (req, res) => {
+router.post("/provider-keys/:id/set-priority", requireOps, adminAudit("provider_key_priority", "provider_keys"), (req, res) => {
   const { priority } = req.body || {};
   if (typeof priority !== "number") {
     res.status(400).json({ error: "priority must be a number" });
@@ -143,18 +161,18 @@ router.post("/provider-keys/:id/set-priority", adminAudit("provider_key_priority
   res.json({ ok: true });
 });
 
-router.get("/provider-health", (_req, res) => {
+router.get("/provider-health", requireRead, (_req, res) => {
   res.json({
     keys: db.prepare("SELECT id, provider_name, status, last_success_at, last_failure_at, error_count FROM provider_keys ORDER BY provider_name").all(),
     recentLogs: db.prepare("SELECT * FROM provider_call_logs ORDER BY created_at DESC LIMIT 100").all(),
   });
 });
 
-router.get("/provider-capability-tests", (_req, res) => {
+router.get("/provider-capability-tests", requireRead, (_req, res) => {
   res.json(db.prepare("SELECT * FROM provider_capability_tests ORDER BY created_at DESC LIMIT 100").all());
 });
 
-router.post("/provider-capability-tests/run", adminAudit("provider_capability_test_run"), (req, res) => {
+router.post("/provider-capability-tests/run", requireOps, adminAudit("provider_capability_test_run"), (req, res) => {
   const { providerName, capability } = req.body || {};
   const id = uuid();
   db.prepare(
@@ -163,15 +181,15 @@ router.post("/provider-capability-tests/run", adminAudit("provider_capability_te
   res.json({ id, passed: true, note: "Stub test — full implementation in Task 3" });
 });
 
-router.get("/failover-events", (_req, res) => {
+router.get("/failover-events", requireRead, (_req, res) => {
   res.json(db.prepare("SELECT * FROM provider_failover_events ORDER BY created_at DESC LIMIT 100").all());
 });
 
-router.get("/failed-generations", (_req, res) => {
+router.get("/failed-generations", requireRead, (_req, res) => {
   res.json(db.prepare("SELECT * FROM job_tasks WHERE status='failed' ORDER BY finished_at DESC LIMIT 100").all());
 });
 
-router.get("/billing", (_req, res) => {
+router.get("/billing", requireFinance, (_req, res) => {
   res.json({
     revenue: db.prepare("SELECT SUM(amount_paise) AS total FROM payment_orders WHERE status='captured'").get(),
     creditFlow: db.prepare("SELECT date(created_at) AS day, SUM(delta) AS total FROM credit_ledger GROUP BY day ORDER BY day DESC LIMIT 60").all(),
@@ -179,22 +197,27 @@ router.get("/billing", (_req, res) => {
   });
 });
 
-router.post("/refund", adminAudit("admin_refund"), (req, res) => {
+router.post("/refund", requireFinance, adminAudit("admin_refund"), (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
   const { userId, credits, reason } = req.body || {};
   if (!userId || typeof credits !== "number") {
     res.status(400).json({ error: "userId and credits required" });
     return;
   }
-  const result = adjustCredits(userId, credits, `admin_refund:${reason ?? "n/a"}:by:${u.sub}`);
-  res.json({ ok: true, balance: result.balance });
+  try {
+    const result = adjustCredits(userId, credits, `admin_refund:${reason ?? "n/a"}:by:${u.sub}`);
+    res.json({ ok: true, balance: result.balance });
+  } catch (err) {
+    const e = err as Error & { statusCode?: number };
+    res.status(e.statusCode ?? 500).json({ error: e.message });
+  }
 });
 
-router.get("/pricing-config", (_req, res) => {
+router.get("/pricing-config", requireFinance, (_req, res) => {
   res.json(db.prepare("SELECT * FROM pricing_config ORDER BY operation").all());
 });
 
-router.post("/pricing-config", adminAudit("pricing_update"), (req, res) => {
+router.post("/pricing-config", requireFinance, adminAudit("pricing_update"), (req, res) => {
   const { operation, credits, description } = req.body || {};
   if (!operation || typeof credits !== "number") {
     res.status(400).json({ error: "operation and credits required" });
@@ -206,7 +229,7 @@ router.post("/pricing-config", adminAudit("pricing_update"), (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/storage", (_req, res) => {
+router.get("/storage", requireRead, (_req, res) => {
   res.json({
     perUser: db.prepare("SELECT user_id, SUM(size_bytes) AS bytes, COUNT(*) AS files FROM storage_usage GROUP BY user_id ORDER BY bytes DESC LIMIT 50").all(),
     perType: db.prepare("SELECT asset_type, SUM(size_bytes) AS bytes, COUNT(*) AS files FROM storage_usage GROUP BY asset_type").all(),
@@ -214,27 +237,27 @@ router.get("/storage", (_req, res) => {
   });
 });
 
-router.get("/audit-logs", (_req, res) => {
+router.get("/audit-logs", requireRead, (_req, res) => {
   res.json(db.prepare("SELECT * FROM admin_audit_logs ORDER BY created_at DESC LIMIT 200").all());
 });
 
-router.get("/song-ops", (_req, res) => {
+router.get("/song-ops", requireSupport, (_req, res) => {
   res.json(db.prepare("SELECT * FROM song_projects ORDER BY created_at DESC LIMIT 100").all());
 });
 
-router.get("/agent-runs", (_req, res) => {
+router.get("/agent-runs", requireSupport, (_req, res) => {
   res.json(db.prepare("SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT 100").all());
 });
 
-router.get("/memory-conflicts", (_req, res) => {
+router.get("/memory-conflicts", requireSupport, (_req, res) => {
   res.json(db.prepare("SELECT * FROM memory_conflicts ORDER BY created_at DESC LIMIT 100").all());
 });
 
-router.get("/error-library", (_req, res) => {
+router.get("/error-library", requireRead, (_req, res) => {
   res.json(db.prepare("SELECT * FROM error_library ORDER BY created_at DESC").all());
 });
 
-router.post("/error-library", adminAudit("error_library_add"), (req, res) => {
+router.post("/error-library", requireOps, adminAudit("error_library_add"), (req, res) => {
   const { code, category, message, resolution } = req.body || {};
   if (!code || !message) {
     res.status(400).json({ error: "code and message required" });
