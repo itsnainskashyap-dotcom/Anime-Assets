@@ -25,3 +25,29 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+
+## AnimeStudioAI (artifacts/api-server)
+
+A premium dark cinematic anime studio SaaS being built per the V17 master prompt
+(`attached_assets/AnimeStudioAI_V17_FULL_FINAL_REPLIT_MASTER_PROMPT_*.md`). The
+api-server artifact intentionally diverges from the workspace defaults:
+
+- **Database**: SQLite via `better-sqlite3` (mandated by spec, not Postgres). DB
+  file lives at `artifacts/api-server/data/animestudio.db` and is initialised
+  from `src/db/schema.sql` on first boot. WAL mode + foreign keys enabled.
+- **Auth**: JWT (HS256) issued by `routes/auth.ts`, verified by
+  `middleware/auth.ts`. Bootstrap a super admin via the `ADMIN_EMAIL` and
+  `ADMIN_PASSWORD` env vars.
+- **Job queue**: Persistent worker queue in `services/queue.ts` and
+  `jobs/queueWorker.ts` using SQL-level worker locking (UPDATE … WHERE
+  locked_by_worker_id IS NULL), heartbeats, and an orphan-recovery sweeper.
+- **Providers**: All AI providers are stubbed in `src/providers/*.ts` and only
+  return mock outputs while `DEMO_MODE=true` or no API key is configured.
+  Magnific is masked behind the visible name "Animax Ultra".
+- **Storage / billing**: Local disk storage rooted at
+  `STORAGE_ROOT_PATH` (served at `/storage`); Razorpay payment provider with
+  webhook signature verification.
+- **Routes**: `/api/auth`, `/api/projects`, `/api/chunks`, `/api/song`,
+  `/api/notifications`, `/api/payments`, `/api/admin`, plus `/api/healthz`.
+- **Encryption**: Provider keys are AES-256-GCM encrypted using
+  `APP_ENCRYPTION_KEY` (see `lib/crypto.ts`).
