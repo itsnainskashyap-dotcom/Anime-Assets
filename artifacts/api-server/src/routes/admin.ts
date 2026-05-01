@@ -33,10 +33,10 @@ router.get("/dashboard", requireRead, (_req, res) => {
     users: (db.prepare("SELECT COUNT(*) AS c FROM users").get() as { c: number }).c,
     projects: (db.prepare("SELECT COUNT(*) AS c FROM projects").get() as { c: number }).c,
     activeJobs: (db.prepare("SELECT COUNT(*) AS c FROM job_tasks WHERE status IN ('queued','in_progress')").get() as { c: number }).c,
-    failedJobsLast24h: (db.prepare("SELECT COUNT(*) AS c FROM job_tasks WHERE status='failed' AND finished_at >= datetime('now','-1 day')").get() as { c: number }).c,
+    failedJobsLast24h: (db.prepare("SELECT COUNT(*) AS c FROM job_tasks WHERE status='failed' AND finished_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')").get() as { c: number }).c,
     totalCreditsIssued: (db.prepare("SELECT COALESCE(SUM(delta),0) AS s FROM credit_ledger WHERE delta > 0").get() as { s: number }).s,
     totalCreditsSpent: -(db.prepare("SELECT COALESCE(SUM(delta),0) AS s FROM credit_ledger WHERE delta < 0").get() as { s: number }).s,
-    revenuePaiseLast30d: (db.prepare("SELECT COALESCE(SUM(amount_paise),0) AS s FROM payment_orders WHERE status='captured' AND created_at >= datetime('now','-30 days')").get() as { s: number }).s,
+    revenuePaiseLast30d: (db.prepare("SELECT COALESCE(SUM(amount_paise),0) AS s FROM payment_orders WHERE status='captured' AND created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')").get() as { s: number }).s,
   };
   const recentJobs = db
     .prepare("SELECT id, type, stage, status, project_id, retry_count, error_message, created_at FROM job_tasks ORDER BY created_at DESC LIMIT 25")

@@ -127,10 +127,10 @@ async function cleanupLoop(): Promise<void> {
   while (!stopRequested) {
     try {
       db.prepare(
-        `DELETE FROM playground_events WHERE created_at < datetime('now', '-7 days')`,
+        `DELETE FROM playground_events WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')`,
       ).run();
       db.prepare(
-        `DELETE FROM agent_activity_logs WHERE created_at < datetime('now', '-14 days')`,
+        `DELETE FROM agent_activity_logs WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')`,
       ).run();
     } catch (err) {
       logger.error({ err }, "Cleanup loop error");
