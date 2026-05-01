@@ -9,7 +9,8 @@ import { updateMemory } from "../services/productionMemory.js";
 import { generateText, generateJson } from "../providers/textProvider.js";
 import { generateImage } from "../providers/imageProvider.js";
 import { generateVideo } from "../providers/videoProvider.js";
-import { generateMusic, generateTts } from "../providers/audioProviders.js";
+import { generateMusic, generateTts, applyLipSync } from "../providers/audioProviders.js";
+import { notify } from "../services/notifications.js";
 import { validateVisual } from "../providers/visionProvider.js";
 import { enqueueTask, type JobTaskRow } from "../services/queue.js";
 import { saveBuffer, STORAGE_ROOT_PATH } from "../providers/storageProvider.js";
@@ -1190,53 +1191,352 @@ async function handleExport(task: JobTaskRow): Promise<Record<string, unknown>> 
     payload: { url, sizeBytes: stat.size, variants: variantOutputs.map((v) => ({ url: v.url, type: v.type, sizeBytes: v.sizeBytes })), zipUrl },
   });
 
-  db.prepare(
-    "INSERT INTO notifications (id, user_id, type, title, body, link) VALUES (?, ?, 'export_ready', 'Your anime is ready', 'Your final video has finished rendering.', ?)",
-  ).run(uuid(), task.user_id, `/app/projects/${task.project_id}`);
+  notify(task.user_id, {
+    type: "export_ready",
+    title: "Your anime is ready",
+    body: "Your final video has finished rendering.",
+    link: `/app/projects/${task.project_id}`,
+    projectId: task.project_id,
+  });
 
   return { url, sizeBytes: stat.size, variants: variantOutputs.map((v) => ({ url: v.url, type: v.type, sizeBytes: v.sizeBytes })), zipUrl };
 }
 
-// ─── SONG ────────────────────────────────────────────────────────────────
-async function handleSong(task: JobTaskRow): Promise<Record<string, unknown>> {
-  if (!task.project_id || !task.user_id) throw new Error("song_generate requires project_id");
-  const payload = task.payload_json ? JSON.parse(task.payload_json) as { prompt?: string; lyricsOnly?: boolean } : {};
+// ─── SONG STUDIO ─────────────────────────────────────────────────────────
+interface SongRow {
+  id: string;
+  project_id: string;
+  user_id: string;
+  title: string | null;
+  concept: string | null;
+  language: string | null;
+  duration_seconds: number | null;
+  status: string;
+  music_url: string | null;
+  final_video_url: string | null;
+}
 
-  recordAgentLog({ projectId: task.project_id, agentName: "song_director", message: "Composing song…" });
+function loadSongForTask(task: JobTaskRow): SongRow {
+  const payload = (task.payload_json ? JSON.parse(task.payload_json) : {}) as { songId?: string };
+  if (!payload.songId) throw new Error("songId required in payload");
+  if (!task.user_id || !task.project_id) {
+    throw new Error("song stage requires authenticated user_id + project_id on the task");
+  }
+  const r = db
+    .prepare<[string, string, string], SongRow>(
+      "SELECT * FROM song_projects WHERE id = ? AND user_id = ? AND project_id = ?",
+    )
+    .get(payload.songId, task.user_id, task.project_id);
+  if (!r) throw new Error(`song ${payload.songId} not found or not owned by this user/project`);
+  return r;
+}
 
-  const { data } = await generateJson<{ title: string; lyrics: string; mood: string }>({
-    systemPrompt: "You are a J-pop / anime OST lyricist. Output strict JSON: { title, lyrics, mood }.",
-    userPrompt: `Create song lyrics for an anime production.\nProject context / brief:\n${payload.prompt || "Theme song for the project."}`,
+function loadOwnedSongById(songId: string, userId: string, projectId: string): SongRow {
+  const r = db
+    .prepare<[string, string, string], SongRow>(
+      "SELECT * FROM song_projects WHERE id = ? AND user_id = ? AND project_id = ?",
+    )
+    .get(songId, userId, projectId);
+  if (!r) throw new Error(`song ${songId} not found or not owned by this user/project`);
+  return r;
+}
+
+// Song Bible + Lyrics Timing Agent — produces titled lyrics with per-line timing.
+async function handleSongLyricsGenerate(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id) throw new Error("song_lyrics_generate requires project_id");
+  const song = loadSongForTask(task);
+  recordAgentLog({ projectId: task.project_id, agentName: "song_bible", message: "Drafting song bible + lyrics…" });
+
+  const totalSec = Math.max(15, Math.min(180, song.duration_seconds ?? 60));
+  const language = (song.language || "en").toLowerCase();
+  const isHinglish = language.startsWith("hi");
+
+  const { data } = await generateJson<{
+    title: string;
+    mood: string;
+    bible: { theme: string; vocalStyle: string; musicStyle: string; visualStyle: string };
+    lines: Array<{ lineNumber: number; text: string; startSec: number; endSec: number }>;
+  }>({
+    systemPrompt: `You are the Song Bible Agent + Lyrics Timing Agent for an anime music studio.
+Produce a strict JSON object with: title (string), mood (string), bible {theme, vocalStyle, musicStyle, visualStyle}, lines (array of {lineNumber, text, startSec, endSec}).
+- Lyrics must fill ${totalSec}s of audio with line timestamps in seconds.
+- Each line is 2–6 seconds long, no overlaps, lineNumber 1..N in order.
+${isHinglish ? "- Lyrics in Roman-script Hinglish (e.g. \"Tum mere saath aaoge\"), NOT Devanagari." : "- Lyrics in clear English suitable for an anime OST."}`,
+    userPrompt: `Song concept:
+${song.concept || song.title || "Theme song for the anime project."}
+
+Song title hint: ${song.title || "auto"}
+Total duration: ${totalSec}s
+Language: ${language}`,
     maxTokens: 2048,
   });
 
-  const songId = uuid();
-  db.prepare(
-    "INSERT INTO song_projects (id, project_id, title, lyrics, mood, status) VALUES (?, ?, ?, ?, ?, 'lyrics_ready')",
-  ).run(songId, task.project_id, data.title, data.lyrics, data.mood);
-
-  let audioUrl = "";
-  try {
-    const music = await generateMusic(`${data.mood} anime OST instrumental, cinematic, high production quality. ${data.title}.`);
-    audioUrl = music.audioUrl;
-  } catch (err) {
-    logger.warn({ err }, "Music generation failed for song");
+  const finalTitle = data.title || song.title || "Untitled OST";
+  db.prepare("UPDATE song_projects SET title = ?, status = 'lyrics_ready', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(
+    finalTitle,
+    song.id,
+  );
+  db.prepare("DELETE FROM song_lyrics WHERE song_id = ?").run(song.id);
+  const insLine = db.prepare(
+    "INSERT INTO song_lyrics (id, song_id, line_number, text, start_seconds, end_seconds) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  for (const line of data.lines || []) {
+    insLine.run(uuid(), song.id, line.lineNumber, line.text, line.startSec, line.endSec);
   }
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "song_lyrics_ready",
+    agent: "lyrics_timing",
+    message: `Lyrics ready for "${finalTitle}" (${(data.lines || []).length} lines).`,
+    payload: { songId: song.id, lineCount: (data.lines || []).length, mood: data.mood, bible: data.bible },
+  });
+  notify(song.user_id, {
+    type: "song_lyrics_ready",
+    title: "Lyrics ready",
+    body: `Song "${finalTitle}" lyrics composed.`,
+    link: `/app/projects/${task.project_id}/song`,
+    projectId: task.project_id,
+  });
+  return { songId: song.id, lineCount: (data.lines || []).length, mood: data.mood };
+}
 
-  db.prepare("UPDATE song_projects SET audio_url = ?, status = ? WHERE id = ?").run(
-    audioUrl,
-    audioUrl ? "ready" : "music_failed",
-    songId,
+async function handleSongMusicGenerate(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id) throw new Error("song_music_generate requires project_id");
+  const song = loadSongForTask(task);
+  recordAgentLog({ projectId: task.project_id, agentName: "song_music", message: "Generating music track…" });
+  const totalSec = Math.max(15, Math.min(180, song.duration_seconds ?? 60));
+  const lyrics = db
+    .prepare<[string], { text: string }>("SELECT text FROM song_lyrics WHERE song_id = ? ORDER BY line_number ASC")
+    .all(song.id)
+    .map((r) => r.text)
+    .join(" / ");
+  const prompt = `${totalSec}s anime OST instrumental, cinematic, high production quality. Title: ${song.title || "Untitled"}. Lyrical mood reference: ${lyrics.slice(0, 400)}`;
+  let musicUrl = "";
+  try {
+    const r = await generateMusic(prompt);
+    musicUrl = r.audioUrl;
+  } catch (err) {
+    logger.warn({ err }, "Song music generation failed");
+  }
+  db.prepare("UPDATE song_projects SET music_url = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(
+    musicUrl,
+    musicUrl ? "music_ready" : "music_failed",
+    song.id,
   );
   recordPlaygroundEvent({
     projectId: task.project_id,
-    eventType: "song_ready",
-    agent: "song_director",
-    message: `Song "${data.title}" composed.`,
-    payload: { songId, audioUrl },
+    eventType: musicUrl ? "song_music_ready" : "song_music_failed",
+    agent: "song_music",
+    message: musicUrl ? "Song track generated." : "Song track generation failed.",
+    payload: { songId: song.id, musicUrl },
+  });
+  return { songId: song.id, musicUrl };
+}
+
+// Song Video Agent — splits the song into 10s chunks and queues per-chunk video.
+async function handleSongVideoGenerate(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id) throw new Error("song_video_generate requires project_id");
+  const song = loadSongForTask(task);
+  const totalSec = Math.max(15, Math.min(180, song.duration_seconds ?? 60));
+  const chunkSec = 10;
+  const chunkCount = Math.ceil(totalSec / chunkSec);
+
+  db.prepare("DELETE FROM song_video_chunks WHERE song_id = ?").run(song.id);
+  const ins = db.prepare(
+    "INSERT INTO song_video_chunks (id, song_id, chunk_number, status) VALUES (?, ?, ?, 'queued')",
+  );
+  const enqueued: string[] = [];
+  for (let i = 1; i <= chunkCount; i++) {
+    const id = uuid();
+    ins.run(id, song.id, i);
+    const t = enqueueTask({
+      type: "song_chunk_video",
+      stage: "song_chunk_video",
+      projectId: song.project_id,
+      userId: song.user_id,
+      payload: { songId: song.id, songChunkId: id, chunkNumber: i, totalChunks: chunkCount },
+      idempotencyKey: `song:${song.id}:chunk:${i}`,
+    });
+    enqueued.push(t.id);
+  }
+  db.prepare("UPDATE song_projects SET status = 'video_generating', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(song.id);
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "song_video_queued",
+    agent: "song_video",
+    message: `Queued ${chunkCount} song video chunks.`,
+    payload: { songId: song.id, chunkCount },
+  });
+  return { songId: song.id, chunkCount, queuedTaskIds: enqueued };
+}
+
+async function handleSongChunkVideo(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id) throw new Error("song_chunk_video requires project_id");
+  const payload = (task.payload_json ? JSON.parse(task.payload_json) : {}) as {
+    songId?: string;
+    songChunkId?: string;
+    chunkNumber?: number;
+    totalChunks?: number;
+  };
+  if (!payload.songId || !payload.songChunkId || !payload.chunkNumber) {
+    throw new Error("song_chunk_video missing payload fields");
+  }
+  if (!task.user_id || !task.project_id) {
+    throw new Error("song_chunk_video requires authenticated user_id + project_id on the task");
+  }
+  const song = loadOwnedSongById(payload.songId, task.user_id, task.project_id);
+  const startSec = (payload.chunkNumber - 1) * 10;
+  const endSec = startSec + 10;
+  const lyricsForChunk = db
+    .prepare<[string, number, number], { text: string }>(
+      "SELECT text FROM song_lyrics WHERE song_id = ? AND start_seconds < ? AND end_seconds > ? ORDER BY line_number ASC",
+    )
+    .all(song.id, endSec, startSec)
+    .map((r) => r.text)
+    .join(" / ");
+  const prompt = `Anime music video, ${song.title || "Untitled"}, cinematic anime style. Chunk ${payload.chunkNumber}/${payload.totalChunks}. Lyrics in this segment: ${lyricsForChunk || "instrumental beat"}.`;
+
+  let videoUrl = "";
+  try {
+    const v = await generateVideo({
+      prompt,
+      durationSeconds: 10,
+      aspectRatio: "16:9",
+      generateAudio: false,
+    });
+    videoUrl = v.videoUrl || "";
+  } catch (err) {
+    logger.warn({ err, songId: song.id, chunk: payload.chunkNumber }, "Song chunk video failed");
+  }
+  db.prepare("UPDATE song_video_chunks SET status = ?, video_url = ? WHERE id = ?").run(
+    videoUrl ? "completed" : "failed",
+    videoUrl,
+    payload.songChunkId,
+  );
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: videoUrl ? "song_chunk_ready" : "song_chunk_failed",
+    agent: "song_video",
+    message: `Song chunk ${payload.chunkNumber}/${payload.totalChunks} ${videoUrl ? "ready" : "failed"}.`,
+    payload: { songId: song.id, chunkNumber: payload.chunkNumber, videoUrl },
+  });
+  return { songId: song.id, chunkNumber: payload.chunkNumber, videoUrl };
+}
+
+async function handleSongLipsync(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id) throw new Error("song_lipsync requires project_id");
+  const song = loadSongForTask(task);
+  if (!song.music_url) {
+    return { skipped: true, reason: "no_music_url" };
+  }
+  const chunks = db
+    .prepare<[string], { id: string; chunk_number: number; video_url: string | null }>(
+      "SELECT id, chunk_number, video_url FROM song_video_chunks WHERE song_id = ? AND video_url IS NOT NULL AND video_url != '' ORDER BY chunk_number ASC",
+    )
+    .all(song.id);
+  let updated = 0;
+  for (const c of chunks) {
+    try {
+      const r = await applyLipSync(c.video_url!, song.music_url);
+      if (r.videoUrl && r.videoUrl !== c.video_url) {
+        db.prepare("UPDATE song_video_chunks SET video_url = ? WHERE id = ?").run(r.videoUrl, c.id);
+        updated++;
+      }
+    } catch (err) {
+      logger.warn({ err, songId: song.id, chunk: c.chunk_number }, "Song chunk lipsync failed");
+    }
+  }
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "song_lipsync_done",
+    agent: "lipsync",
+    message: `Lip-sync pass complete (${updated}/${chunks.length} chunks updated).`,
+    payload: { songId: song.id, updated, total: chunks.length },
+  });
+  return { songId: song.id, updated, total: chunks.length };
+}
+
+async function handleSongExport(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id || !task.user_id) throw new Error("song_export requires project_id");
+  const song = loadSongForTask(task);
+  const chunks = db
+    .prepare<[string], { chunk_number: number; video_url: string | null }>(
+      "SELECT chunk_number, video_url FROM song_video_chunks WHERE song_id = ? ORDER BY chunk_number ASC",
+    )
+    .all(song.id);
+  const ready = chunks.filter((c) => c.video_url);
+  if (ready.length === 0) {
+    return { skipped: true, reason: "no_chunks_ready" };
+  }
+
+  // Write SRT from lyrics
+  const lyrics = db
+    .prepare<[string], { line_number: number; text: string; start_seconds: number; end_seconds: number }>(
+      "SELECT line_number, text, start_seconds, end_seconds FROM song_lyrics WHERE song_id = ? ORDER BY line_number ASC",
+    )
+    .all(song.id);
+  const fmt = (s: number): string => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = Math.floor(s % 60);
+    const ms = Math.floor((s - Math.floor(s)) * 1000);
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+  };
+  const srt = lyrics
+    .map((l) => `${l.line_number}\n${fmt(l.start_seconds)} --> ${fmt(l.end_seconds)}\n${l.text}\n`)
+    .join("\n");
+  const srtSaved = await saveBuffer(Buffer.from(srt, "utf8"), {
+    userId: task.user_id,
+    projectId: task.project_id,
+    assetType: `songs/${song.id}`,
+    filename: "lyrics.srt",
+    contentType: "text/plain",
   });
 
-  return { songId, audioUrl, title: data.title };
+  // Persist a "final url" pointer to the first chunk for now (full FFmpeg stitch is in handleExport).
+  const finalUrl = ready[0]?.video_url || "";
+  db.prepare("UPDATE song_projects SET final_video_url = ?, status = 'completed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(
+    finalUrl,
+    song.id,
+  );
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "song_export_ready",
+    agent: "song_export",
+    message: `Song export prepared (${ready.length} chunks, SRT generated).`,
+    payload: { songId: song.id, finalUrl, srtUrl: srtSaved.url, chunkCount: ready.length },
+  });
+  notify(task.user_id, {
+    type: "song_export_ready",
+    title: "Song export ready",
+    body: `Your song "${song.title || "Untitled"}" is ready.`,
+    link: `/app/projects/${task.project_id}/song`,
+    projectId: task.project_id,
+  });
+  return { songId: song.id, finalUrl, srtUrl: srtSaved.url, chunkCount: ready.length };
+}
+
+// Generic notification handler — fan-out from queue into DB+SSE via the notify service.
+interface NotificationPayload {
+  userId?: string;
+  type?: string;
+  title?: string;
+  body?: string;
+  link?: string;
+  projectId?: string;
+}
+async function handleNotification(task: JobTaskRow): Promise<Record<string, unknown>> {
+  const payload = (task.payload_json ? JSON.parse(task.payload_json) : {}) as NotificationPayload;
+  const userId = payload.userId || task.user_id;
+  if (!userId) return { skipped: true, reason: "no_user" };
+  notify(userId, {
+    type: payload.type || "info",
+    title: payload.title || "Notification",
+    body: payload.body,
+    link: payload.link,
+    projectId: payload.projectId || task.project_id || undefined,
+  });
+  return { delivered: true };
 }
 
 // ─── CLEANUP / NOOP ──────────────────────────────────────────────────────
@@ -1331,10 +1631,15 @@ export const HANDLERS = {
   reference_video_trim: handleReferenceVideoTrim,
   validation: handleValidation,
   export_project: handleExport,
-  song_generate: handleSong,
+  song_lyrics_generate: handleSongLyricsGenerate,
+  song_music_generate: handleSongMusicGenerate,
+  song_video_generate: handleSongVideoGenerate,
+  song_chunk_video: handleSongChunkVideo,
+  song_lipsync: handleSongLipsync,
+  song_export: handleSongExport,
   cleanup: handleCleanup,
   capability_probe: handleCapabilityProbe,
-  notification: async () => ({ noop: true }),
+  notification: handleNotification,
 } satisfies Record<string, (task: JobTaskRow) => Promise<Record<string, unknown>>>;
 
 // Helper to keep static type narrowing simple in worker

@@ -81,6 +81,56 @@ async function recoveryLoop(): Promise<void> {
   }
 }
 
+async function snapshotLoop(): Promise<void> {
+  while (!stopRequested) {
+    try {
+      const projects = db
+        .prepare<[], { id: string; status: string; current_stage: string | null; progress_percent: number | null }>(
+          `SELECT id, status, current_stage, progress_percent FROM projects
+           WHERE status IN ('queued','generating','validating','exporting','production_locked')`,
+        )
+        .all();
+      const insertSnap = db.prepare(
+        "INSERT INTO live_progress_snapshots (id, project_id, snapshot_json) VALUES (?, ?, ?)",
+      );
+      for (const p of projects) {
+        const taskCounts = db
+          .prepare<[string], { status: string; n: number }>(
+            "SELECT status, COUNT(*) as n FROM job_tasks WHERE project_id = ? GROUP BY status",
+          )
+          .all(p.id);
+        const chunkCounts = db
+          .prepare<[string], { status: string; n: number }>(
+            "SELECT status, COUNT(*) as n FROM video_chunks WHERE project_id = ? GROUP BY status",
+          )
+          .all(p.id);
+        const snap = {
+          status: p.status,
+          stage: p.current_stage,
+          progressPercent: p.progress_percent,
+          tasks: Object.fromEntries(taskCounts.map((r) => [r.status, r.n])),
+          chunks: Object.fromEntries(chunkCounts.map((r) => [r.status, r.n])),
+          at: new Date().toISOString(),
+        };
+        insertSnap.run(uuid(), p.id, JSON.stringify(snap));
+      }
+      // Trim per project to last 200 snapshots.
+      db.prepare(
+        `DELETE FROM live_progress_snapshots
+         WHERE id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at DESC) AS rn
+             FROM live_progress_snapshots
+           ) WHERE rn > 200
+         )`,
+      ).run();
+    } catch (err) {
+      logger.error({ err }, "Snapshot loop error");
+    }
+    await new Promise((r) => setTimeout(r, 15_000));
+  }
+}
+
 async function cleanupLoop(): Promise<void> {
   while (!stopRequested) {
     try {
@@ -102,6 +152,7 @@ export function startWorkers(): void {
   void pollLoop();
   void recoveryLoop();
   void cleanupLoop();
+  void snapshotLoop();
 }
 
 export function stopWorkers(): void {

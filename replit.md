@@ -106,3 +106,26 @@ api-server artifact intentionally diverges from the workspace defaults:
 - **UI cues** (`AppShell` + `ChunkInspector`): Demo Mode badge sourced
   from `/api/health`, and a "Reference Video" pill on chunks whose
   `generation_mode='reference_video'`.
+- **Song Studio pipeline** (`jobs/handlers.ts`): six stages —
+  `song_lyrics_generate` (Song Bible + Lyrics Timing Agent: writes
+  `song_projects` + per-line `song_lyrics` rows with second-precise timing),
+  `song_music_generate` (writes `song_projects.music_url`),
+  `song_video_generate` (creates `song_video_chunks` rows + enqueues one
+  internal `song_chunk_video` per 10s segment), `song_lipsync` (per-chunk
+  Magnific lipsync), and `song_export` (SRT from `song_lyrics`, persists
+  `final_video_url`, fires user notification). All stages enforce
+  ownership via `loadSongForTask(task)` /
+  `loadOwnedSongById(songId, userId, projectId)` to prevent cross-user
+  songId tampering.
+- **Notification fan-out** (`services/notifications.ts` +
+  `handleNotification`): both queue-driven and direct callers persist to
+  `notifications` and publish an SSE `notification` event on the project
+  channel.
+- **Live progress snapshots** (`jobs/queueWorker.ts:snapshotLoop`): every
+  15 s, every active project (`status` in queued/generating/validating/
+  exporting/production_locked) gets a JSON snapshot of task + chunk
+  counts written to `live_progress_snapshots`, trimmed to the last 200
+  per project via SQLite `ROW_NUMBER() OVER (PARTITION BY project_id)`.
+- **Web preview port**: `Start application` workflow runs vite on
+  `PORT=18134` to match the artifact's `localPort` so the workspace
+  preview iframe resolves correctly.

@@ -51,7 +51,7 @@ function songStage(stage: string): import("express").RequestHandler {
       stage,
       projectId: song.project_id,
       userId: u.sub,
-      payload: { songId: song.id, ...(req.body || {}) },
+      payload: { ...(req.body || {}), songId: song.id },
       idempotencyKey: `song:${song.id}:${stage}:${Date.now()}`,
     });
     res.status(202).json({ jobId: task.id, status: "queued" });
