@@ -23,6 +23,33 @@ if (!fs.existsSync(schemaPath)) {
 const schemaSql = fs.readFileSync(schemaPath, "utf-8");
 db.exec(schemaSql);
 
+/**
+ * Lightweight column-add migrations. SQLite's CREATE TABLE IF NOT EXISTS
+ * does not add new columns to pre-existing tables, so we add them here
+ * idempotently. Each entry: [table, column, columnDef].
+ */
+const columnMigrations: Array<[string, string, string]> = [
+  ["video_chunks", "seed_frame_image_url", "TEXT"],
+  // provider_keys columns added during multi-key failover work — needed by
+  // legacy DBs that pre-date the schema.sql additions.
+  ["provider_keys", "cooldown_until", "TEXT"],
+  ["provider_keys", "error_count", "INTEGER NOT NULL DEFAULT 0"],
+  ["provider_keys", "last_failure_at", "TEXT"],
+  ["provider_keys", "last_success_at", "TEXT"],
+  ["provider_keys", "notes", "TEXT"],
+  ["provider_keys", "status", "TEXT DEFAULT 'unknown'"],
+];
+for (const [table, column, def] of columnMigrations) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 const seedPricing = db.prepare(
   "INSERT OR IGNORE INTO pricing_config(operation, credits, description) VALUES (?, ?, ?)",
 );

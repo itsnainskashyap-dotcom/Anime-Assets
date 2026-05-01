@@ -71,6 +71,38 @@ api-server artifact intentionally diverges from the workspace defaults:
   `STORAGE_ROOT_PATH` (served at `/storage`); Razorpay payment provider with
   webhook signature verification.
 - **Routes**: `/api/auth`, `/api/projects`, `/api/chunks`, `/api/song`,
-  `/api/notifications`, `/api/payments`, `/api/admin`, plus `/api/healthz`.
+  `/api/notifications`, `/api/payments`, `/api/admin`, plus `/api/healthz`
+  and `/api/health` (returns `{ demoMode, engineLabel: "Animax Ultra" }`).
 - **Encryption**: Provider keys are AES-256-GCM encrypted using
   `APP_ENCRYPTION_KEY` (see `lib/crypto.ts`).
+- **V17 chunk pipeline**: `services/promptCompiler.ts` builds 2200-char
+  Magnific prompts with character/env locks and the `@Video1` token in
+  reference-video mode. `services/visualizationDirector.ts` issues distinct
+  calls for the 5-image pack (seed/scene_board/start/end/element_1/2) and
+  fills every column on `video_chunks`. `services/referenceVideo.ts` uses
+  `ffprobe-static` + `ffmpeg-static` to download/probe/trim the previous
+  chunk's clip to ≤10s and persist it to local storage; chunk N>1 is forced
+  into `generation_mode='reference_video'`, queued sequentially via
+  `dependsOn: [prevTaskId]`, and auto-enqueues `audio_chunk_generate`,
+  `validation`, and `reference_video_trim` follow-ups.
+- **Audio Director** (`services/audioDirector.ts`): plans dialogue + BGM +
+  SFX per chunk through Claude, then renders with Magnific via a
+  Hinglish-aware phonetic normalizer (`services/phoneticNormalizer.ts`).
+- **Multi-key failover** (`providers/registry.ts`): `getActiveKey` returns
+  `{id, key, source}`; `recordKeyError` bumps `error_count`, sets
+  `cooldown_until` on 401/403/429/5xx, and logs a row to
+  `provider_failover_events`. `withFailover` retries with the next key.
+- **Vision fallback** (`providers/visionProvider.ts`): prefers Gemini 2.5
+  Flash (or Pro for `highAccuracy`) when `GOOGLE_API_KEY`/`GEMINI_API_KEY`
+  is configured; falls back to Claude vision otherwise.
+- **Capability tester** (`services/capabilityTester.ts`): real probes for
+  text, vision, image, text-to-video, image-to-video,
+  reference-video-token (@Video1), prompt-budget, native-audio,
+  multi-shot. Persisted to `provider_capability_tests`. Triggered by
+  `POST /api/admin/provider-capability-tests/run`.
+- **Export variants**: `handleExport` produces concat MP4, 720p MP4, 9:16
+  MP4, an SRT generated from `chunk_audio_plans`, and a ZIP bundle (via
+  `archiver`) — all rows recorded in `exported_files`.
+- **UI cues** (`AppShell` + `ChunkInspector`): Demo Mode badge sourced
+  from `/api/health`, and a "Reference Video" pill on chunks whose
+  `generation_mode='reference_video'`.

@@ -83,7 +83,18 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
           <ChevronLeft className="w-4 h-4" />
         </Button>
         <div>
-          <h1 className="font-bold">Chunk {chunk.index} Inspector</h1>
+          <h1 className="font-bold flex items-center gap-2">
+            Chunk {chunk.index} Inspector
+            {((chunk.generationMode || chunk.generation_mode) === "reference_video") && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-300"
+                title="This chunk continues the previous shot using a reference video (@Video1)."
+                data-testid="badge-reference-video"
+              >
+                <Video className="w-3 h-3" /> Reference Video
+              </span>
+            )}
+          </h1>
           <div className="text-xs text-muted-foreground">Scene {chunk.sceneId} • Status: {chunk.status}</div>
         </div>
         <div className="ml-auto flex gap-2">

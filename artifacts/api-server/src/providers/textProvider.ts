@@ -1,5 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { DEMO_MODE, demoResponse, getActiveKey, notConfiguredError } from "./registry.js";
+import {
+  DEMO_MODE,
+  demoResponse,
+  getActiveKey,
+  notConfiguredError,
+  withFailover,
+  type ActiveKey,
+} from "./registry.js";
 import { logger } from "../lib/logger.js";
 
 export interface TextRequest {
@@ -19,22 +26,21 @@ export interface TextResponse {
 
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 
-let cachedClient: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (cachedClient) return cachedClient;
-  const key = getActiveKey("anthropic");
-  if (!key) {
+function buildClient(key: ActiveKey): Anthropic {
+  const baseURL = process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+  return new Anthropic({
+    apiKey: key.key,
+    ...(baseURL ? { baseURL } : {}),
+  });
+}
+
+function ensureConfigured(): void {
+  if (!getActiveKey("anthropic")) {
     throw Object.assign(new Error("Text provider (Anthropic) not configured"), {
       response: notConfiguredError("anthropic", "text"),
       statusCode: 503,
     });
   }
-  const baseURL = process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
-  cachedClient = new Anthropic({
-    apiKey: key.key,
-    ...(baseURL ? { baseURL } : {}),
-  });
-  return cachedClient;
 }
 
 function extractText(message: Anthropic.Messages.Message): string {
@@ -52,7 +58,7 @@ export async function generateText(req: TextRequest): Promise<TextResponse> {
       ...demoResponse("text"),
     };
   }
-  const client = getClient();
+  ensureConfigured();
   const system =
     (req.systemPrompt ?? "") +
     (req.jsonOnly
@@ -70,15 +76,29 @@ export async function generateText(req: TextRequest): Promise<TextResponse> {
   }
   userContent.push({ type: "text", text: req.userPrompt });
 
-  const message = await client.messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: req.maxTokens ?? 8192,
-    system: system || undefined,
-    messages: [{ role: "user", content: userContent }],
+  return withFailover<TextResponse>("anthropic", async (key) => {
+    const client = buildClient(key);
+    try {
+      const message = await client.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: req.maxTokens ?? 8192,
+        system: system || undefined,
+        messages: [{ role: "user", content: userContent }],
+      });
+      const text = extractText(message);
+      return { text, raw: { model: message.model, usage: message.usage } };
+    } catch (err) {
+      // Anthropic SDK errors expose `.status`; surface as `statusCode` so
+      // withFailover can detect quota/auth conditions.
+      const status =
+        (err as { status?: number; statusCode?: number })?.status ??
+        (err as { statusCode?: number })?.statusCode;
+      if (status && !(err as { statusCode?: number }).statusCode) {
+        (err as { statusCode?: number }).statusCode = status;
+      }
+      throw err;
+    }
   });
-
-  const text = extractText(message);
-  return { text, raw: { model: message.model, usage: message.usage } };
 }
 
 export async function generateJson<T = unknown>(req: TextRequest): Promise<{ data: T; text: string; raw?: unknown }> {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
@@ -23,6 +23,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [demoMode, setDemoMode] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(import.meta.env.BASE_URL + "api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d && typeof d.demoMode === "boolean") setDemoMode(d.demoMode);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const mainNav = [
     { name: "Dashboard", href: "/app", icon: LayoutDashboard },
@@ -175,6 +189,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           
           <div className="flex items-center gap-4">
+            {demoMode && (
+              <div
+                className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                title="Demo Mode is on — generations return placeholder assets and no provider calls are made."
+                data-testid="badge-demo-mode"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                <span className="text-xs font-semibold tracking-wide uppercase">Demo Mode</span>
+              </div>
+            )}
             <div className="hidden sm:flex items-center gap-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border">
               <CreditCard className="w-4 h-4 text-primary" />
               <span className="text-sm font-medium">{user?.credits.toLocaleString() ?? 0}</span>

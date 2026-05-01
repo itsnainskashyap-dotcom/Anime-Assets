@@ -49,6 +49,12 @@ export interface Chunk {
   startImageUrl?: string;
   endImageUrl?: string;
   retryCount?: number;
+  generationMode?: string;
+  generation_mode?: string;
+  referenceVideoUrl?: string;
+  reference_video_url?: string;
+  referenceVideoTrimmedUrl?: string;
+  reference_video_trimmed_url?: string;
 }
 
 export interface CreditPack {

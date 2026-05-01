@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS video_chunks (
   reference_endpoint TEXT,
   reference_video_url TEXT,
   reference_video_trimmed_url TEXT,
+  seed_frame_image_url TEXT,
   start_frame_image_url TEXT,
   end_frame_image_url TEXT,
   scene_board_image_url TEXT,
@@ -555,3 +556,23 @@ CREATE TABLE IF NOT EXISTS demo_assets (
   url TEXT,
   metadata_json TEXT
 );
+
+CREATE TABLE IF NOT EXISTS chunk_audio_plans (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES video_chunks(id) ON DELETE CASCADE,
+  plan_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_audio_plans_chunk ON chunk_audio_plans(chunk_id);
+
+
+CREATE TABLE IF NOT EXISTS chunk_audio_plans (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES video_chunks(id) ON DELETE CASCADE,
+  plan_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_audio_plans_chunk ON chunk_audio_plans(chunk_id);
+
+CREATE INDEX IF NOT EXISTS idx_capability_tests_provider ON provider_capability_tests(provider_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_failover_provider ON provider_failover_events(provider_name, created_at);

@@ -15,6 +15,11 @@ import { enqueueTask, type JobTaskRow } from "../services/queue.js";
 import { saveBuffer, STORAGE_ROOT_PATH } from "../providers/storageProvider.js";
 import { safeFetch } from "../lib/safeFetch.js";
 import ffmpegPath from "ffmpeg-static";
+import { compileChunkPrompt } from "../services/promptCompiler.js";
+import { buildVisualizationPack } from "../services/visualizationDirector.js";
+import { trimReferenceVideoTo10s } from "../services/referenceVideo.js";
+import { generateAudioForChunk } from "../services/audioDirector.js";
+import { runCapabilityProbe } from "../services/capabilityTester.js";
 
 // ─── Types representing the structured Story Bible Claude returns ────────
 export interface StoryBibleData {
@@ -333,10 +338,87 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
   return { generated };
 }
 
-// ─── STORYBOARD ──────────────────────────────────────────────────────────
+// ─── STORYBOARD (skeleton: split scenes into 10s chunks) ─────────────────
 async function handleStoryboard(task: JobTaskRow): Promise<Record<string, unknown>> {
   if (!task.project_id || !task.user_id) throw new Error("storyboard_generate requires project_id");
   setProjectStage(task.project_id, "storyboard", 50);
+
+  const scenes = db
+    .prepare<[string], {
+      id: string;
+      scene_number: number;
+      title: string | null;
+      description: string | null;
+      duration_seconds: number;
+    }>(
+      "SELECT id, scene_number, title, description, duration_seconds FROM scenes WHERE project_id = ? ORDER BY scene_number ASC",
+    )
+    .all(task.project_id);
+
+  if (scenes.length === 0) return { skipped: true, reason: "no_scenes" };
+
+  let totalChunks = 0;
+  let globalChunkNo = 0;
+  for (const scene of scenes) {
+    const sceneDur = Math.max(5, scene.duration_seconds || 10);
+    // Spec: 10-second chunks. A scene >10s is split into ⌈sceneDur/10⌉ chunks.
+    const numChunks = Math.max(1, Math.ceil(sceneDur / 10));
+
+    for (let i = 0; i < numChunks; i++) {
+      globalChunkNo++;
+      const chunkDur = i === numChunks - 1 ? sceneDur - i * 10 : 10;
+      // Use upsert pattern: keep existing chunk row if scene_id+chunk_index already set.
+      const existing = db
+        .prepare<[string, number], { id: string }>(
+          "SELECT id FROM video_chunks WHERE scene_id = ? AND chunk_number = ?",
+        )
+        .get(scene.id, globalChunkNo);
+      if (!existing) {
+        db.prepare(
+          `INSERT INTO video_chunks (id, project_id, scene_id, chunk_number, duration_seconds, status, generation_mode, standard_endpoint, reference_endpoint, provider_model_visible_name, provider_model_hidden_id)
+           VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'Animax Ultra', ?)`,
+        ).run(
+          uuid(),
+          task.project_id,
+          scene.id,
+          globalChunkNo,
+          chunkDur,
+          globalChunkNo === 1 ? "standard" : "reference_video",
+          "/v1/ai/video/kling-v3-omni-pro",
+          "/v1/ai/reference-to-video/kling-v3-omni-pro",
+          "kling-v3-omni-pro",
+        );
+        totalChunks++;
+      }
+    }
+    db.prepare("UPDATE scenes SET status='storyboarded' WHERE id = ?").run(scene.id);
+  }
+
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "storyboard_ready",
+    agent: "storyboard_director",
+    message: `Storyboard skeleton ready — ${scenes.length} scenes split into ${totalChunks} chunks (10s each).`,
+    payload: { sceneCount: scenes.length, chunkCount: totalChunks },
+  });
+  setProjectStage(task.project_id, "storyboard_ready", 55);
+
+  // Auto-enqueue visualization stage so the next pipeline step runs.
+  enqueueTask({
+    type: "visualization_generate",
+    stage: "visualization_generate",
+    projectId: task.project_id,
+    userId: task.user_id,
+    payload: {},
+    idempotencyKey: `${task.project_id}:visualization:${Date.now()}`,
+  });
+  return { scenes: scenes.length, chunks: totalChunks };
+}
+
+// ─── VISUALIZATION (full 5-image pack per scene) ─────────────────────────
+async function handleVisualization(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id || !task.user_id) throw new Error("visualization_generate requires project_id");
+  setProjectStage(task.project_id, "visualization", 60);
 
   const project = projectRow(task.project_id);
   if (!project) throw new Error("project not found");
@@ -348,133 +430,71 @@ async function handleStoryboard(task: JobTaskRow): Promise<Record<string, unknow
       title: string | null;
       description: string | null;
       shot_type: string | null;
-      duration_seconds: number;
       emotion: string | null;
+      duration_seconds: number;
     }>(
-      "SELECT id, scene_number, title, description, shot_type, duration_seconds, emotion FROM scenes WHERE project_id = ? ORDER BY scene_number ASC",
+      "SELECT id, scene_number, title, description, shot_type, emotion, duration_seconds FROM scenes WHERE project_id = ? ORDER BY scene_number ASC",
     )
     .all(task.project_id);
-
-  if (scenes.length === 0) {
-    return { skipped: true, reason: "no_scenes" };
-  }
+  if (scenes.length === 0) return { skipped: true, reason: "no_scenes" };
 
   const characters = db
-    .prepare<[string], { id: string; name: string; portrait_url: string | null; model_sheet_front_url: string | null; appearance_json: string | null }>(
-      "SELECT id, name, portrait_url, model_sheet_front_url, appearance_json FROM characters WHERE project_id = ?",
+    .prepare<[string], { portrait_url: string | null; model_sheet_front_url: string | null }>(
+      "SELECT portrait_url, model_sheet_front_url FROM characters WHERE project_id = ?",
     )
     .all(task.project_id);
-
+  const publicBase = process.env.PUBLIC_BASE_URL || "";
   const charRefs = characters
     .map((c) => c.portrait_url || c.model_sheet_front_url)
     .filter((u): u is string => Boolean(u))
-    .map((u) => (u.startsWith("/storage/") ? `${process.env.PUBLIC_BASE_URL || ""}${u}` : u))
+    .map((u) => (u.startsWith("/storage/") ? `${publicBase}${u}` : u))
     .filter((u) => u.startsWith("http"));
 
   const animeStyle = project.genre || "modern anime";
   let scenesWithFrames = 0;
 
-  for (const scene of scenes) {
-    recordAgentLog({
+  for (const [idx, scene] of scenes.entries()) {
+    const pack = await buildVisualizationPack({
       projectId: task.project_id,
-      agentName: "storyboard_director",
-      message: `Storyboarding scene ${scene.scene_number}: ${scene.title || ""}`,
+      userId: task.user_id,
+      scene,
+      characterRefs: charRefs,
+      animeStyle,
+      isFirstScene: idx === 0,
     });
+    if (pack.startFrameUrl || pack.endFrameUrl) scenesWithFrames++;
 
-    const basePrompt = `${animeStyle} anime style. ${scene.shot_type || "medium"} shot. ${scene.description || scene.title || ""}. Mood: ${scene.emotion || "cinematic"}. Sharp linework, vivid colors, dynamic lighting, no text, no watermark.`;
-
-    let startUrl: string | undefined;
-    let endUrl: string | undefined;
-
-    try {
-      const start = await generateImage({
-        prompt: `${basePrompt} Opening frame of the scene.`,
-        aspectRatio: "16:9",
-        referenceUrls: charRefs.slice(0, 3),
-        userId: task.user_id,
-        projectId: task.project_id,
-        assetType: `scenes/${scene.id}`,
-        filename: "start_frame.png",
-      });
-      startUrl = start.url;
-    } catch (err) {
-      logger.error({ err, sceneId: scene.id }, "Storyboard start_frame failed");
-    }
-    try {
-      const end = await generateImage({
-        prompt: `${basePrompt} Closing frame of the scene, slightly later moment.`,
-        aspectRatio: "16:9",
-        referenceUrls: charRefs.slice(0, 3),
-        userId: task.user_id,
-        projectId: task.project_id,
-        assetType: `scenes/${scene.id}`,
-        filename: "end_frame.png",
-      });
-      endUrl = end.url;
-    } catch (err) {
-      logger.error({ err, sceneId: scene.id }, "Storyboard end_frame failed");
-    }
-
-    // Persist scene visualization
-    const sv = db
-      .prepare<[string], { id: string }>("SELECT id FROM scene_visualizations WHERE scene_id = ?")
-      .get(scene.id);
-    if (sv) {
+    // Update all chunks of this scene with their visualization assets.
+    const chunks = db
+      .prepare<[string], { id: string; chunk_number: number }>(
+        "SELECT id, chunk_number FROM video_chunks WHERE scene_id = ? ORDER BY chunk_number ASC",
+      )
+      .all(scene.id);
+    for (const c of chunks) {
       db.prepare(
-        "UPDATE scene_visualizations SET start_frame_url = ?, end_frame_url = ? WHERE id = ?",
-      ).run(startUrl ?? null, endUrl ?? null, sv.id);
-    } else {
-      db.prepare(
-        "INSERT INTO scene_visualizations (id, scene_id, start_frame_url, end_frame_url) VALUES (?, ?, ?, ?)",
-      ).run(uuid(), scene.id, startUrl ?? null, endUrl ?? null);
-    }
-
-    // Create / update video chunk row.
-    const existing = db
-      .prepare<[string], { id: string }>("SELECT id FROM video_chunks WHERE scene_id = ? ORDER BY chunk_number ASC LIMIT 1")
-      .get(scene.id);
-    const chunkId = existing?.id || uuid();
-    if (!existing) {
-      db.prepare(
-        `INSERT INTO video_chunks (id, project_id, scene_id, chunk_number, duration_seconds, status, prompt_text, start_frame_image_url, end_frame_image_url, generation_mode, standard_endpoint, provider_model_visible_name, provider_model_hidden_id)
-         VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'standard', ?, 'Animax Ultra', ?)`,
+        `UPDATE video_chunks
+         SET seed_frame_image_url = ?, start_frame_image_url = ?, end_frame_image_url = ?,
+             scene_board_image_url = ?, element_1_url = ?, element_2_url = ?, status = 'queued',
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = ?`,
       ).run(
-        chunkId,
-        task.project_id,
-        scene.id,
-        scene.scene_number,
-        scene.duration_seconds,
-        basePrompt,
-        startUrl ?? null,
-        endUrl ?? null,
-        "/v1/ai/video/kling-v3-omni-pro",
-        "kling-v3-omni-pro",
+        pack.seedFrameUrl,
+        pack.startFrameUrl,
+        pack.endFrameUrl,
+        pack.sceneBoardUrl,
+        pack.element1Url,
+        pack.element2Url,
+        c.id,
       );
-    } else {
-      db.prepare(
-        "UPDATE video_chunks SET prompt_text = ?, start_frame_image_url = ?, end_frame_image_url = ?, status='queued', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
-      ).run(basePrompt, startUrl ?? null, endUrl ?? null, chunkId);
     }
-
-    db.prepare("UPDATE scenes SET status='storyboarded' WHERE id = ?").run(scene.id);
-    if (startUrl || endUrl) scenesWithFrames++;
-
-    recordPlaygroundEvent({
-      projectId: task.project_id,
-      eventType: "scene_storyboarded",
-      agent: "storyboard_director",
-      message: `Scene ${scene.scene_number} storyboarded.`,
-      payload: { sceneId: scene.id, chunkId, startUrl, endUrl },
-    });
   }
 
   if (scenes.length > 0 && scenesWithFrames === 0) {
     throw new Error(
-      `Storyboard frame generation failed for all ${scenes.length} scenes; aborting so production pipeline does not run with empty frames.`,
+      `Visualization image generation failed for all ${scenes.length} scenes; aborting.`,
     );
   }
 
-  // Visualization pack record
   const vp = db
     .prepare<[string], { id: string }>("SELECT id FROM visualization_packs WHERE project_id = ?")
     .get(task.project_id);
@@ -483,10 +503,10 @@ async function handleStoryboard(task: JobTaskRow): Promise<Record<string, unknow
   } else {
     db.prepare(
       "INSERT INTO visualization_packs (id, project_id, status, json) VALUES (?, ?, 'ready', '{}')",
-    ).run(uuid(), task.project_id, );
+    ).run(uuid(), task.project_id);
   }
 
-  setProjectStage(task.project_id, "storyboard_ready", 60);
+  setProjectStage(task.project_id, "visualization_ready", 70);
   return { scenes: scenes.length };
 }
 
@@ -515,6 +535,9 @@ async function handleProductionPipeline(task: JobTaskRow): Promise<Record<string
   const attemptByChunk = new Map(chunkAttempts.map((c) => [c.id, c.attempt_number ?? 0]));
 
   const chunkTaskIds: string[] = [];
+  // Sequential: each chunk depends on the previous one so chunk N can use the
+  // previous chunk's video as its reference for reference-to-video mode.
+  let prevTaskId: string | undefined;
   for (const c of chunks) {
     const cycle = attemptByChunk.get(c.id) ?? 0;
     const t = enqueueTask({
@@ -525,8 +548,10 @@ async function handleProductionPipeline(task: JobTaskRow): Promise<Record<string
       chunkId: c.id,
       payload: { chunkId: c.id },
       idempotencyKey: `${task.project_id}:chunk:${c.id}:cycle:${cycle}`,
+      dependsOn: prevTaskId ? [prevTaskId] : undefined,
     });
     chunkTaskIds.push(t.id);
+    prevTaskId = t.id;
   }
 
   // Final export task depends on all chunk tasks. Cycle is the max attempt
@@ -568,10 +593,13 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
       chunk_number: number;
       duration_seconds: number;
       prompt_text: string | null;
+      generation_mode: string | null;
+      reference_video_url: string | null;
+      reference_video_trimmed_url: string | null;
       start_frame_image_url: string | null;
       end_frame_image_url: string | null;
     }>(
-      "SELECT id, project_id, scene_id, chunk_number, duration_seconds, prompt_text, start_frame_image_url, end_frame_image_url FROM video_chunks WHERE id = ?",
+      "SELECT id, project_id, scene_id, chunk_number, duration_seconds, prompt_text, generation_mode, reference_video_url, reference_video_trimmed_url, start_frame_image_url, end_frame_image_url FROM video_chunks WHERE id = ?",
     )
     .get(chunkId);
   if (!chunk) throw new Error("chunk not found");
@@ -580,25 +608,161 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
   recordAgentLog({
     projectId: task.project_id,
     agentName: "video_director",
-    message: `Producing chunk ${chunk.chunk_number} (${chunk.duration_seconds}s)…`,
+    message: `Producing chunk ${chunk.chunk_number} (${chunk.duration_seconds}s, mode=${chunk.generation_mode || "standard"})…`,
   });
 
-  // Resolve start frame URL to absolute (for Magnific to fetch).
+  // Resolve URL helper.
   const publicBase = process.env.PUBLIC_BASE_URL || "";
-  const toAbsolute = (u: string | null) => {
+  const toAbsolute = (u: string | null | undefined) => {
     if (!u) return undefined;
     if (u.startsWith("http")) return u;
     if (u.startsWith("/storage/") && publicBase) return `${publicBase}${u}`;
     return undefined;
   };
 
+  // Look up the previous chunk's video for reference-video continuity (chunk N>1).
+  let prevChunkVideoUrl: string | undefined;
+  let prevChunkEndFrameUrl: string | undefined;
+  let prevChunkId: string | undefined;
+  let prevChunkAlreadyTrimmedUrl: string | null = null;
+  if (chunk.chunk_number > 1) {
+    const prev = db
+      .prepare<[string, number], { id: string; video_url: string | null; end_frame_image_url: string | null; reference_video_trimmed_url: string | null }>(
+        "SELECT id, video_url, end_frame_image_url, reference_video_trimmed_url FROM video_chunks WHERE project_id = ? AND chunk_number = ?",
+      )
+      .get(task.project_id, chunk.chunk_number - 1);
+    prevChunkId = prev?.id;
+    prevChunkAlreadyTrimmedUrl = prev?.reference_video_trimmed_url || null;
+    prevChunkVideoUrl = toAbsolute(prevChunkAlreadyTrimmedUrl || prev?.video_url || null);
+    prevChunkEndFrameUrl = toAbsolute(prev?.end_frame_image_url || null);
+  }
+
+  // Compile the prompt with the official compiler (handles @Video1, char locks).
+  const scene = chunk.scene_id
+    ? db
+        .prepare<[string], { id: string; scene_number: number; title: string | null; description: string | null; shot_type: string | null; emotion: string | null; duration_seconds: number }>(
+          "SELECT id, scene_number, title, description, shot_type, emotion, duration_seconds FROM scenes WHERE id = ?",
+        )
+        .get(chunk.scene_id)
+    : undefined;
+
+  let mode: "standard" | "reference_video" = (chunk.generation_mode === "reference_video" ? "reference_video" : "standard");
+  // If chunk_number > 1 and we have a previous video, force reference_video mode.
+  if (chunk.chunk_number > 1 && prevChunkVideoUrl) mode = "reference_video";
+
+  const project = projectRow(task.project_id);
+  const compiled = scene
+    ? compileChunkPrompt({
+        projectId: task.project_id,
+        scene: {
+          id: scene.id,
+          scene_number: scene.scene_number,
+          title: scene.title,
+          description: scene.description,
+          shot_type: scene.shot_type,
+          emotion: scene.emotion,
+          duration_seconds: scene.duration_seconds,
+        },
+        chunk: { id: chunk.id, chunk_number: chunk.chunk_number, duration_seconds: chunk.duration_seconds },
+        mode,
+        prevChunkVideoUrl,
+        prevChunkEndFrameUrl,
+        animeStyle: project?.genre || "modern anime",
+      })
+    : null;
+
+  const finalPrompt = compiled?.prompt || chunk.prompt_text || "";
+  const negative = compiled?.negativePrompt;
+
+  // Persist compiled prompt + mode + char count.
+  db.prepare(
+    "UPDATE video_chunks SET prompt_text = ?, negative_prompt_text = ?, prompt_char_count = ?, generation_mode = ?, reference_video_url = COALESCE(?, reference_video_url) WHERE id = ?",
+  ).run(
+    finalPrompt,
+    negative || null,
+    finalPrompt.length,
+    mode,
+    mode === "reference_video" ? prevChunkVideoUrl ?? chunk.reference_video_url : null,
+    chunkId,
+  );
+
   try {
+    // For reference-video mode, ensure the reference is trimmed to ≤10s.
+    // We trim INLINE (not via a follow-up task) so chunk N never consumes an
+    // untrimmed reference. The reference_video_trim follow-up still runs for
+    // visibility / re-trimming when the previous chunk produces longer output.
+    let referenceVideoUrl: string | undefined;
+    if (mode === "reference_video") {
+      // Two reference sources are possible:
+      //   (a) prev chunk's video (chunk_number > 1, the common path) — its
+      //       trimmed URL lives on the PREV chunk's row.
+      //   (b) an externally-attached `chunk.reference_video_url` whose trim
+      //       lives on this chunk's own row (`reference_video_trimmed_url`).
+      // We pick (a) when available and trim onto prev's row to stay consistent
+      // with the lookup at line ~639, otherwise fall back to (b).
+      const ownTrimmed = chunk.reference_video_trimmed_url || null;
+      const ownExternal = chunk.reference_video_url || null;
+
+      if (prevChunkId && prevChunkVideoUrl) {
+        if (prevChunkAlreadyTrimmedUrl) {
+          referenceVideoUrl = toAbsolute(prevChunkAlreadyTrimmedUrl) || prevChunkVideoUrl;
+        } else {
+          try {
+            const trim = await trimReferenceVideoTo10s({
+              sourceUrl: prevChunkVideoUrl,
+              userId: task.user_id,
+              projectId: task.project_id,
+              chunkId: prevChunkId,
+            });
+            referenceVideoUrl = toAbsolute(trim.url) || trim.url;
+            // Persist on PREV chunk's row so the async follow-up trim is a
+            // no-op (handleReferenceVideoTrim short-circuits when set).
+            db.prepare(
+              "UPDATE video_chunks SET reference_video_trimmed_url = ? WHERE id = ?",
+            ).run(trim.url, prevChunkId);
+          } catch (err) {
+            logger.warn(
+              { err, chunkId: chunk.id, prevChunkId },
+              "Inline reference trim of prev chunk failed; using raw reference",
+            );
+            referenceVideoUrl = prevChunkVideoUrl;
+          }
+        }
+      } else if (ownTrimmed || ownExternal) {
+        const candidate = toAbsolute(ownTrimmed || ownExternal);
+        if (!candidate) throw new Error("reference_video mode requires a reference video URL");
+        if (!ownTrimmed && ownExternal) {
+          try {
+            const trim = await trimReferenceVideoTo10s({
+              sourceUrl: candidate,
+              userId: task.user_id,
+              projectId: task.project_id,
+              chunkId: chunk.id,
+            });
+            referenceVideoUrl = toAbsolute(trim.url) || trim.url;
+            db.prepare(
+              "UPDATE video_chunks SET reference_video_trimmed_url = ? WHERE id = ?",
+            ).run(trim.url, chunk.id);
+          } catch (err) {
+            logger.warn({ err, chunkId: chunk.id }, "Inline external-ref trim failed; using raw reference");
+            referenceVideoUrl = candidate;
+          }
+        } else {
+          referenceVideoUrl = candidate;
+        }
+      } else {
+        throw new Error("reference_video mode requires a previous chunk video URL");
+      }
+    }
+
     const result = await generateVideo({
-      prompt: chunk.prompt_text || "",
-      durationSeconds: chunk.duration_seconds,
+      prompt: finalPrompt,
+      negativePrompt: negative,
+      durationSeconds: Math.min(chunk.duration_seconds, 10),
       aspectRatio: "16:9",
       startImageUrl: toAbsolute(chunk.start_frame_image_url),
-      endImageUrl: toAbsolute(chunk.end_frame_image_url),
+      endImageUrl: mode === "standard" ? toAbsolute(chunk.end_frame_image_url) : undefined,
+      referenceVideoUrl,
       userId: task.user_id,
       projectId: task.project_id,
       chunkId,
@@ -612,11 +776,11 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
         projectId: task.project_id,
         eventType: "chunk_ready",
         agent: "video_director",
-        message: `Chunk ${chunk.chunk_number} ready.`,
-        payload: { chunkId, videoUrl: result.videoUrl },
+        message: `Chunk ${chunk.chunk_number} ready (mode=${mode}).`,
+        payload: { chunkId, videoUrl: result.videoUrl, mode },
       });
 
-      // Enqueue validation as a follow-up.
+      // Enqueue validation + audio (Audio Director) as follow-ups.
       enqueueTask({
         type: "validation",
         stage: "validation",
@@ -625,12 +789,28 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
         chunkId,
         payload: { chunkId },
       });
-      return { chunkId, videoUrl: result.videoUrl, status: result.status };
+      enqueueTask({
+        type: "audio_chunk_generate",
+        stage: "audio_chunk_generate",
+        projectId: task.project_id,
+        userId: task.user_id,
+        chunkId,
+        payload: { chunkId },
+      });
+
+      // If this chunk's output may be > 10s (rare, depends on provider), schedule a trim
+      // so it can be used as the reference for the next chunk.
+      enqueueTask({
+        type: "reference_video_trim",
+        stage: "reference_video_trim",
+        projectId: task.project_id,
+        userId: task.user_id,
+        chunkId,
+        payload: { chunkId, sourceUrl: result.videoUrl, forNextChunkNumber: chunk.chunk_number + 1 },
+      });
+      return { chunkId, videoUrl: result.videoUrl, status: result.status, mode };
     }
 
-    // Provider returned non-final status — keep chunk in processing state and
-    // throw so the queue retries (with backoff) instead of marking the task
-    // completed and unblocking dependent export prematurely.
     db.prepare("UPDATE video_chunks SET status='processing' WHERE id = ?").run(chunkId);
     throw new Error(
       `Video generation not yet completed (status=${result.status}, jobId=${result.jobId ?? "n/a"})`,
@@ -752,6 +932,161 @@ async function handleExport(task: JobTaskRow): Promise<Record<string, unknown>> 
   db.prepare(
     "INSERT INTO exported_files (id, project_id, type, url, size_bytes) VALUES (?, ?, 'mp4', ?, ?)",
   ).run(uuid(), task.project_id, url, stat.size);
+
+  // ── Variants: 720p + 9:16 ─────────────────────────────────────────────
+  const variantOutputs: Array<{ url: string; localPath: string; type: string; sizeBytes: number; filename: string }> = [
+    { url, localPath: outputPath, type: "mp4", sizeBytes: stat.size, filename: outputName },
+  ];
+
+  async function runFfmpeg(args: string[], label: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+      proc.on("error", reject);
+      proc.on("exit", (code: number | null) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg ${label} exited ${code}: ${stderr.slice(-300)}`));
+      });
+    });
+  }
+
+  try {
+    const v720Name = `final_720p_${Date.now()}.mp4`;
+    const v720Path = path.join(workDir, v720Name);
+    await runFfmpeg(
+      ["-y", "-i", outputPath, "-vf", "scale=-2:720", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", v720Path],
+      "720p",
+    );
+    const s = fs.statSync(v720Path);
+    const u = `/storage/${task.user_id}/${task.project_id}/exports/${v720Name}`;
+    db.prepare("INSERT INTO exported_files (id, project_id, type, url, size_bytes) VALUES (?, ?, 'mp4_720p', ?, ?)").run(
+      uuid(), task.project_id, u, s.size,
+    );
+    variantOutputs.push({ url: u, localPath: v720Path, type: "mp4_720p", sizeBytes: s.size, filename: v720Name });
+  } catch (err) {
+    logger.warn({ err }, "Export variant 720p failed");
+  }
+
+  try {
+    const v916Name = `final_9x16_${Date.now()}.mp4`;
+    const v916Path = path.join(workDir, v916Name);
+    await runFfmpeg(
+      [
+        "-y", "-i", outputPath,
+        "-vf", "crop=ih*9/16:ih,scale=1080:1920",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-c:a", "aac",
+        v916Path,
+      ],
+      "9:16",
+    );
+    const s = fs.statSync(v916Path);
+    const u = `/storage/${task.user_id}/${task.project_id}/exports/${v916Name}`;
+    db.prepare("INSERT INTO exported_files (id, project_id, type, url, size_bytes) VALUES (?, ?, 'mp4_9x16', ?, ?)").run(
+      uuid(), task.project_id, u, s.size,
+    );
+    variantOutputs.push({ url: u, localPath: v916Path, type: "mp4_9x16", sizeBytes: s.size, filename: v916Name });
+  } catch (err) {
+    logger.warn({ err }, "Export variant 9:16 failed");
+  }
+
+  // ── SRT subtitles ─────────────────────────────────────────────────────
+  let srtPath: string | null = null;
+  try {
+    // Build a chunk_number → cumulative-start-offset map using each chunk's
+    // actual duration_seconds (clamped to ≤10 since we only ever emit ≤10s
+    // segments). This avoids drift when a chunk is shorter than 10s
+    // (e.g. the final chunk of a scene with sceneDur not divisible by 10).
+    const chunks = db
+      .prepare<[string], { chunk_number: number; duration_seconds: number }>(
+        "SELECT chunk_number, duration_seconds FROM video_chunks WHERE project_id = ? ORDER BY chunk_number ASC",
+      )
+      .all(task.project_id);
+    const offsetByChunk = new Map<number, number>();
+    let acc = 0;
+    for (const c of chunks) {
+      offsetByChunk.set(c.chunk_number, acc);
+      const dur = Math.min(Math.max(c.duration_seconds || 10, 1), 10);
+      acc += dur;
+    }
+
+    const audioPlans = db
+      .prepare<[string], { chunk_number: number; plan_json: string }>(
+        `SELECT vc.chunk_number, ap.plan_json
+         FROM chunk_audio_plans ap
+         JOIN video_chunks vc ON vc.id = ap.chunk_id
+         WHERE vc.project_id = ?
+         ORDER BY vc.chunk_number ASC, ap.created_at DESC`,
+      )
+      .all(task.project_id);
+    function fmtTs(seconds: number): string {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      const ms = Math.floor((seconds - Math.floor(seconds)) * 1000);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+    }
+    const lines: string[] = [];
+    let cueNum = 1;
+    const seenChunks = new Set<number>();
+    for (const row of audioPlans) {
+      if (seenChunks.has(row.chunk_number)) continue;
+      seenChunks.add(row.chunk_number);
+      const offset = offsetByChunk.get(row.chunk_number) ?? (row.chunk_number - 1) * 10;
+      let plan: { dialogue?: Array<{ speaker?: string; line?: string; startSec?: number; endSec?: number }> } = {};
+      try { plan = JSON.parse(row.plan_json); } catch { /* ignore */ }
+      for (const d of plan.dialogue || []) {
+        const start = offset + (typeof d.startSec === "number" ? d.startSec : 0);
+        const end = offset + (typeof d.endSec === "number" ? d.endSec : (d.startSec || 0) + 2);
+        lines.push(`${cueNum}`);
+        lines.push(`${fmtTs(start)} --> ${fmtTs(end)}`);
+        lines.push(`${d.speaker ? `${d.speaker}: ` : ""}${(d.line || "").trim()}`);
+        lines.push("");
+        cueNum++;
+      }
+    }
+    if (lines.length) {
+      const srtName = `subtitles_${Date.now()}.srt`;
+      srtPath = path.join(workDir, srtName);
+      fs.writeFileSync(srtPath, lines.join("\n"), "utf8");
+      const u = `/storage/${task.user_id}/${task.project_id}/exports/${srtName}`;
+      db.prepare("INSERT INTO exported_files (id, project_id, type, url, size_bytes) VALUES (?, ?, 'srt', ?, ?)").run(
+        uuid(), task.project_id, u, fs.statSync(srtPath).size,
+      );
+      variantOutputs.push({ url: u, localPath: srtPath, type: "srt", sizeBytes: fs.statSync(srtPath).size, filename: srtName });
+    }
+  } catch (err) {
+    logger.warn({ err }, "SRT generation failed");
+  }
+
+  // ── ZIP all artefacts ─────────────────────────────────────────────────
+  let zipUrl: string | null = null;
+  try {
+    const archiver = (await import("archiver")).default;
+    const zipName = `bundle_${Date.now()}.zip`;
+    const zipPath = path.join(workDir, zipName);
+    await new Promise<void>((resolve, reject) => {
+      const out = fs.createWriteStream(zipPath);
+      const arc = archiver("zip", { zlib: { level: 6 } });
+      out.on("close", () => resolve());
+      out.on("error", reject);
+      arc.on("error", reject);
+      arc.pipe(out);
+      for (const v of variantOutputs) {
+        if (fs.existsSync(v.localPath)) arc.file(v.localPath, { name: v.filename });
+      }
+      arc.finalize();
+    });
+    const zipStat = fs.statSync(zipPath);
+    zipUrl = `/storage/${task.user_id}/${task.project_id}/exports/${zipName}`;
+    db.prepare("INSERT INTO exported_files (id, project_id, type, url, size_bytes) VALUES (?, ?, 'zip', ?, ?)").run(
+      uuid(), task.project_id, zipUrl, zipStat.size,
+    );
+  } catch (err) {
+    logger.warn({ err }, "ZIP packaging failed");
+  }
+
   db.prepare(
     "UPDATE projects SET status='completed', current_stage='completed', progress_percent=100, thumbnail_url = COALESCE(thumbnail_url, ?), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
   ).run(null, task.project_id);
@@ -760,16 +1095,15 @@ async function handleExport(task: JobTaskRow): Promise<Record<string, unknown>> 
     projectId: task.project_id,
     eventType: "export_ready",
     agent: "export_agent",
-    message: `Final video ready (${(stat.size / 1024 / 1024).toFixed(1)} MB).`,
-    payload: { url, sizeBytes: stat.size },
+    message: `Final video ready (${(stat.size / 1024 / 1024).toFixed(1)} MB) with ${variantOutputs.length} files.`,
+    payload: { url, sizeBytes: stat.size, variants: variantOutputs.map((v) => ({ url: v.url, type: v.type, sizeBytes: v.sizeBytes })), zipUrl },
   });
 
-  // Notification
   db.prepare(
     "INSERT INTO notifications (id, user_id, type, title, body, link) VALUES (?, ?, 'export_ready', 'Your anime is ready', 'Your final video has finished rendering.', ?)",
   ).run(uuid(), task.user_id, `/app/projects/${task.project_id}`);
 
-  return { url, sizeBytes: stat.size };
+  return { url, sizeBytes: stat.size, variants: variantOutputs.map((v) => ({ url: v.url, type: v.type, sizeBytes: v.sizeBytes })), zipUrl };
 }
 
 // ─── SONG ────────────────────────────────────────────────────────────────
@@ -824,19 +1158,92 @@ async function handleCleanup(): Promise<Record<string, unknown>> {
   return { cleaned: r.changes };
 }
 
+async function handleReferenceVideoTrim(task: JobTaskRow): Promise<Record<string, unknown>> {
+  const payload = (task.payload_json ? JSON.parse(task.payload_json) : {}) as {
+    chunkId?: string;
+    sourceUrl?: string;
+    forNextChunkNumber?: number;
+  };
+  if (!task.project_id) throw new Error("reference_video_trim requires project_id");
+  const chunkId = payload.chunkId;
+  if (!chunkId) {
+    return { skipped: true, reason: "no_chunk_id" };
+  }
+  const chunk = db
+    .prepare<[string], { id: string; project_id: string; chunk_number: number; video_url: string | null; reference_video_trimmed_url: string | null }>(
+      "SELECT id, project_id, chunk_number, video_url, reference_video_trimmed_url FROM video_chunks WHERE id = ?",
+    )
+    .get(chunkId);
+  if (!chunk) return { skipped: true, reason: "chunk_not_found" };
+  if (chunk.reference_video_trimmed_url) {
+    return { skipped: true, reason: "already_trimmed", url: chunk.reference_video_trimmed_url };
+  }
+  const sourceUrl = payload.sourceUrl || chunk.video_url;
+  if (!sourceUrl) return { skipped: true, reason: "no_source_video" };
+
+  recordAgentLog({
+    projectId: chunk.project_id,
+    agentName: "reference_video_trim",
+    message: `Trimming chunk ${chunk.chunk_number} for reference handoff…`,
+  });
+
+  const trimmed = await trimReferenceVideoTo10s({
+    sourceUrl,
+    userId: task.user_id || "system",
+    projectId: chunk.project_id,
+    chunkId: chunk.id,
+  });
+
+  db.prepare("UPDATE video_chunks SET reference_video_trimmed_url = ? WHERE id = ?").run(trimmed.url, chunk.id);
+
+  recordPlaygroundEvent({
+    projectId: chunk.project_id,
+    eventType: "reference_video_ready",
+    agent: "reference_video_trim",
+    message: `Reference clip from chunk ${chunk.chunk_number} ready for chunk ${(payload.forNextChunkNumber ?? chunk.chunk_number + 1)}.`,
+    payload: { chunkId: chunk.id, trimmedUrl: trimmed.url, durationSeconds: trimmed.durationSeconds, trimmedFlag: trimmed.trimmed },
+  });
+
+  return { trimmedUrl: trimmed.url, durationSeconds: trimmed.durationSeconds, trimmed: trimmed.trimmed };
+}
+
+async function handleAudioChunk(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id || !task.user_id) throw new Error("audio_chunk_generate requires project_id");
+  const payload = (task.payload_json ? JSON.parse(task.payload_json) : {}) as { chunkId?: string };
+  if (!payload.chunkId) throw new Error("audio_chunk_generate requires chunkId");
+  const r = await generateAudioForChunk({
+    chunkId: payload.chunkId,
+    userId: task.user_id,
+    projectId: task.project_id,
+  });
+  return {
+    bgmUrl: r.bgmUrl,
+    ttsCount: r.ttsUrls.length,
+    sfxCount: r.sfxUrls.length,
+    dialogueLines: r.plan.dialogue.length,
+  };
+}
+
+async function handleCapabilityProbe(task: JobTaskRow): Promise<Record<string, unknown>> {
+  const payload = (task.payload_json ? JSON.parse(task.payload_json) : {}) as { providerName?: string; capabilities?: string[] };
+  return runCapabilityProbe({ providerName: payload.providerName, capabilities: payload.capabilities }) as unknown as Record<string, unknown>;
+}
+
 export const HANDLERS = {
   story_bible_generate: handleStoryBible,
   character_generate: handleCharacterGenerate,
   storyboard_generate: handleStoryboard,
-  visualization_generate: handleStoryboard, // alias — visualization is part of storyboard
+  visualization_generate: handleVisualization,
   production_pipeline: handleProductionPipeline,
   video_chunk_generate: handleVideoChunk,
+  audio_chunk_generate: handleAudioChunk,
+  reference_video_trim: handleReferenceVideoTrim,
   validation: handleValidation,
   export_project: handleExport,
   song_generate: handleSong,
   cleanup: handleCleanup,
+  capability_probe: handleCapabilityProbe,
   notification: async () => ({ noop: true }),
-  reference_video_trim: async (task: JobTaskRow) => ({ noop: true, taskId: task.id }),
 } satisfies Record<string, (task: JobTaskRow) => Promise<Record<string, unknown>>>;
 
 // Helper to keep static type narrowing simple in worker

@@ -7,7 +7,7 @@
  * MAGNIFIC_AUTH_HEADER (defaults to `x-freepik-api-key`).
  */
 import { logger } from "../lib/logger.js";
-import { getActiveKey, notConfiguredError } from "./registry.js";
+import { getActiveKey, notConfiguredError, withFailover } from "./registry.js";
 import db from "../db/index.js";
 import { v4 as uuid } from "uuid";
 
@@ -61,14 +61,16 @@ export async function magnificFetch<T = unknown>(
   endpoint: string,
   opts: MagnificRequestOptions = {},
 ): Promise<T> {
-  const key = getActiveKey("magnific");
-  if (!key) {
+  // Pre-flight: ensure a key exists so we surface a clean 503 instead of
+  // throwing inside withFailover with a generic "no keys" message.
+  if (!getActiveKey("magnific")) {
     throw new MagnificError(
       "Magnific provider not configured",
       503,
       notConfiguredError("magnific", endpoint),
     );
   }
+
   const url = new URL(endpoint.startsWith("http") ? endpoint : `${BASE_URL}${endpoint}`);
   if (opts.query) {
     for (const [k, v] of Object.entries(opts.query)) {
@@ -76,49 +78,56 @@ export async function magnificFetch<T = unknown>(
     }
   }
   const method = opts.method || (opts.body ? "POST" : "GET");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    [AUTH_HEADER]: key.key,
-  };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const startedAt = Date.now();
-  let statusCode = 0;
-  let success = false;
-  let errorMessage: string | undefined;
-  try {
-    const res = await fetch(url.toString(), {
-      method,
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-      signal: controller.signal,
-    });
-    statusCode = res.status;
-    const contentType = res.headers.get("content-type") || "";
-    const data = contentType.includes("application/json") ? await res.json() : await res.text();
-    if (!res.ok) {
-      errorMessage = typeof data === "string" ? data : JSON.stringify(data).slice(0, 500);
-      throw new MagnificError(`Magnific ${method} ${endpoint} failed: ${res.status}`, res.status, data);
+  return withFailover<T>("magnific", async (key) => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      [AUTH_HEADER]: key.key,
+    };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const startedAt = Date.now();
+    let statusCode = 0;
+    let success = false;
+    let errorMessage: string | undefined;
+    try {
+      const res = await fetch(url.toString(), {
+        method,
+        headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      });
+      statusCode = res.status;
+      const contentType = res.headers.get("content-type") || "";
+      const data = contentType.includes("application/json") ? await res.json() : await res.text();
+      if (!res.ok) {
+        errorMessage = typeof data === "string" ? data : JSON.stringify(data).slice(0, 500);
+        throw new MagnificError(
+          `Magnific ${method} ${endpoint} failed: ${res.status}`,
+          res.status,
+          data,
+        );
+      }
+      success = true;
+      return data as T;
+    } catch (err) {
+      if (!errorMessage) errorMessage = err instanceof Error ? err.message : String(err);
+      if (err instanceof MagnificError) throw err;
+      throw new MagnificError(errorMessage, statusCode || 500);
+    } finally {
+      clearTimeout(timer);
+      logCall({
+        endpoint,
+        statusCode,
+        latencyMs: Date.now() - startedAt,
+        success,
+        errorMessage,
+        keyId: key.id,
+      });
     }
-    success = true;
-    return data as T;
-  } catch (err) {
-    if (!errorMessage) errorMessage = err instanceof Error ? err.message : String(err);
-    if (err instanceof MagnificError) throw err;
-    throw new MagnificError(errorMessage, statusCode || 500);
-  } finally {
-    clearTimeout(timer);
-    logCall({
-      endpoint,
-      statusCode,
-      latencyMs: Date.now() - startedAt,
-      success,
-      errorMessage,
-      keyId: key.id,
-    });
-  }
+  });
 }
 
 export async function poll<T>(

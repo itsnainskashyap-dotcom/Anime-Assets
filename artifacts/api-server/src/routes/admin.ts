@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin, adminAudit, type AuthenticatedRequest } from
 import { adminLimiter } from "../middleware/rateLimit.js";
 import { encryptSecret, maskKey } from "../lib/crypto.js";
 import { adjustCredits } from "../services/credits.js";
+import { runCapabilityProbe } from "../services/capabilityTester.js";
 
 const router: IRouter = Router();
 
@@ -172,13 +173,19 @@ router.get("/provider-capability-tests", requireRead, (_req, res) => {
   res.json(db.prepare("SELECT * FROM provider_capability_tests ORDER BY created_at DESC LIMIT 100").all());
 });
 
-router.post("/provider-capability-tests/run", requireOps, adminAudit("provider_capability_test_run"), (req, res) => {
-  const { providerName, capability } = req.body || {};
-  const id = uuid();
-  db.prepare(
-    "INSERT INTO provider_capability_tests (id, provider_name, capability, passed, details_json) VALUES (?, ?, ?, 1, ?)",
-  ).run(id, providerName ?? "unknown", capability ?? "connectivity", JSON.stringify({ stub: true }));
-  res.json({ id, passed: true, note: "Stub test — full implementation in Task 3" });
+router.post("/provider-capability-tests/run", requireOps, adminAudit("provider_capability_test_run"), async (req, res) => {
+  const { providerName, capability, capabilities } = (req.body || {}) as {
+    providerName?: string;
+    capability?: string;
+    capabilities?: string[];
+  };
+  try {
+    const list = capabilities && Array.isArray(capabilities) ? capabilities : capability ? [capability] : undefined;
+    const result = await runCapabilityProbe({ providerName, capabilities: list, persist: true });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "capability_probe_failed", message: (err as Error).message });
+  }
 });
 
 router.get("/failover-events", requireRead, (_req, res) => {
