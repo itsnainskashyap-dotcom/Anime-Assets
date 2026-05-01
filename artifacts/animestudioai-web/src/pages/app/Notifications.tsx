@@ -2,14 +2,15 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bell, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
+import type { Notification } from "@/types/api";
 
 export default function Notifications() {
   const { api } = useAuth();
   const queryClient = useQueryClient();
 
-  const { data: notifications = [], isLoading } = useQuery({
+  const { data: notifications = [], isLoading, error } = useQuery<Notification[]>({
     queryKey: ["notifications"],
-    queryFn: () => api("/api/notifications").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/notifications").then(res => res.json()),
   });
 
   const markRead = useMutation({
@@ -29,7 +30,7 @@ export default function Notifications() {
             <Bell className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <div className="text-2xl font-bold leading-none">{notifications.filter((n: any) => !n.read).length}</div>
+            <div className="text-2xl font-bold leading-none">{notifications.filter((n) => !n.read).length}</div>
             <div className="text-xs font-medium text-muted-foreground">Unread</div>
           </div>
         </div>
@@ -38,8 +39,10 @@ export default function Notifications() {
       <div className="space-y-4">
         {isLoading ? (
           <div className="flex justify-center p-8"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
+        ) : error ? (
+          <div className="p-8 text-center text-destructive">Failed to load notifications: {(error as Error).message}</div>
         ) : notifications.length > 0 ? (
-          notifications.map((n: any) => (
+          notifications.map((n) => (
             <div key={n.id} className={`p-4 rounded-xl border transition-colors flex gap-4 ${n.read ? 'border-border/50 bg-card/50' : 'border-primary/50 bg-primary/5'}`}>
               <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${n.read ? 'bg-secondary text-muted-foreground' : 'bg-primary text-primary-foreground'}`}>
                 <Bell className="w-4 h-4" />

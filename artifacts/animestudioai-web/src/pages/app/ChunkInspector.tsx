@@ -1,10 +1,16 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { ChevronLeft, Upload, RefreshCcw, Video, Loader2, Play, Eye, Settings2, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
+import { useProjectChunks } from "@/hooks/use-projects";
+import type { Chunk } from "@/types/api";
+
+interface ReferenceVideo {
+  url?: string;
+}
 
 export default function ChunkInspector({ params }: { params: { id: string; chunkId: string } }) {
   const { id, chunkId } = params;
@@ -14,28 +20,22 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
 
   const [uploading, setUploading] = useState(false);
 
-  const { data: chunk, isLoading } = useQuery({
-    queryKey: ["chunks", chunkId],
-    queryFn: () => api(`/api/chunks/${chunkId}`).then(res => res.json()).catch(() => ({
-      id: chunkId,
-      sceneId: "scene-1",
-      index: 1,
-      status: "failed",
-      progress: 0,
-      durationSec: 3.5,
-      prompt: "Cinematic shot of Elara running in the rain.",
-      retryCount: 2,
-    })),
-  });
+  const { data: chunks, isLoading, error } = useProjectChunks(id);
 
-  const { data: refVideo } = useQuery({
+  const chunk: Chunk | undefined = chunks?.find((c) => c.id === chunkId);
+
+  const { data: refVideo } = useQuery<ReferenceVideo | null>({
     queryKey: ["chunks", chunkId, "reference"],
-    queryFn: () => api(`/api/chunks/${chunkId}/reference-video`).then(res => res.json()).catch(() => null),
+    queryFn: () =>
+      api(`/api/chunks/${chunkId}/reference-video`).then(
+        (res) => res.json() as Promise<ReferenceVideo | null>,
+      ),
+    enabled: !!chunk,
   });
 
   const retryChunk = useMutation({
     mutationFn: () => api(`/api/chunks/${chunkId}/retry`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["chunks", chunkId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", id, "chunks"] }),
   });
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -60,7 +60,20 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
   };
 
   if (isLoading) {
-    return <div className="h-full flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+    return <div className="p-8 text-muted-foreground">Loading…</div>;
+  }
+  if (error) {
+    return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
+  }
+  if (!chunk) {
+    return (
+      <div className="p-8 text-muted-foreground">
+        Chunk not found in this project.
+        <div className="mt-4">
+          <Button variant="outline" onClick={() => setLocation(`/app/projects/${id}/production`)}>Back to Production</Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -70,8 +83,8 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
           <ChevronLeft className="w-4 h-4" />
         </Button>
         <div>
-          <h1 className="font-bold">Chunk {chunk?.index} Inspector</h1>
-          <div className="text-xs text-muted-foreground">Scene {chunk?.sceneId} • Status: {chunk?.status}</div>
+          <h1 className="font-bold">Chunk {chunk.index} Inspector</h1>
+          <div className="text-xs text-muted-foreground">Scene {chunk.sceneId} • Status: {chunk.status}</div>
         </div>
         <div className="ml-auto flex gap-2">
           <Button variant="outline" size="sm" onClick={() => retryChunk.mutate()} disabled={retryChunk.isPending}>
@@ -89,7 +102,7 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Generation Prompt</label>
                 <div className="p-3 mt-1 bg-background/50 rounded border border-border/50 text-sm leading-relaxed">
-                  {chunk?.prompt || "No prompt available."}
+                  {chunk.prompt || "No prompt available."}
                 </div>
               </div>
               <div>
@@ -105,13 +118,8 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Retries</span>
-                  <span className="font-medium">{chunk?.retryCount || 0}</span>
+                  <span className="font-medium">{chunk.retryCount || 0}</span>
                 </div>
-                {chunk?.status === 'failed' && (
-                  <div className="p-3 bg-destructive/10 text-destructive text-sm rounded border border-destructive/20 mt-4">
-                    Last generation failed. Error: Temporally inconsistent frame sequence detected.
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -119,7 +127,7 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
           <div className="space-y-6">
             <div className="bg-card rounded-xl border border-border/50 p-6 space-y-4">
               <h3 className="font-bold flex items-center gap-2"><Video className="w-4 h-4 text-primary" /> Reference Video</h3>
-              
+
               <div className="aspect-video bg-black rounded-lg border border-border/50 flex flex-col items-center justify-center relative overflow-hidden group">
                 {refVideo?.url ? (
                   <>
@@ -138,11 +146,11 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
 
               <div className="flex items-center gap-4">
                 <div className="flex-1">
-                  <Input 
-                    type="file" 
-                    accept="video/mp4" 
+                  <Input
+                    type="file"
+                    accept="video/mp4"
                     onChange={handleUpload}
-                    className="hidden" 
+                    className="hidden"
                     id="ref-upload"
                   />
                   <label htmlFor="ref-upload">
@@ -155,18 +163,6 @@ export default function ChunkInspector({ params }: { params: { id: string; chunk
                   </label>
                 </div>
               </div>
-            </div>
-
-            <div className="bg-card rounded-xl border border-border/50 p-6 space-y-4">
-              <h3 className="font-bold flex items-center gap-2"><Activity className="w-4 h-4 text-green-500" /> Validation Engine</h3>
-              <pre className="p-3 bg-background/50 rounded border border-border/50 text-xs overflow-auto max-h-48 text-muted-foreground">
-                {JSON.stringify({
-                  temporal_consistency: 0.94,
-                  face_preservation: 0.88,
-                  lighting_match: 0.96,
-                  artifacts_detected: false
-                }, null, 2)}
-              </pre>
             </div>
           </div>
         </div>

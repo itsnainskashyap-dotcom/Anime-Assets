@@ -5,23 +5,36 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+interface PricingRow {
+  operation: string;
+  description: string;
+  credits: number;
+}
+
+interface PricingUpdateInput {
+  operation: string;
+  credits: number;
+}
+
 export default function AdminPricingConfig() {
   const { api } = useAuth();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Record<string, number>>({});
 
-  const { data: pricing = [], isLoading } = useQuery({
+  const { data: pricing = [], isLoading, error } = useQuery<PricingRow[]>({
     queryKey: ["admin-pricing"],
-    queryFn: () => api("/api/admin/pricing-config").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/pricing-config").then(res => res.json() as Promise<PricingRow[]>).catch(() => [] as PricingRow[]),
   });
 
-  const updatePricing = useMutation({
-    mutationFn: (data: any) => api("/api/admin/pricing-config", { method: "POST", body: JSON.stringify(data) }),
+  const updatePricing = useMutation<unknown, Error, PricingUpdateInput>({
+    mutationFn: (data) => api("/api/admin/pricing-config", { method: "POST", body: JSON.stringify(data) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-pricing"] });
       setEditing({});
     }
   });
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   const handleSave = (operation: string) => {
     if (editing[operation] !== undefined) {
@@ -52,7 +65,7 @@ export default function AdminPricingConfig() {
             {isLoading ? (
               <tr><td colSpan={4} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
             ) : pricing.length > 0 ? (
-              pricing.map((p: any) => (
+              pricing.map((p) => (
                 <tr key={p.operation} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-mono text-xs">{p.operation}</td>
                   <td className="px-4 py-3 text-muted-foreground">{p.description}</td>

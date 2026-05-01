@@ -1,24 +1,18 @@
-import { useState, useEffect, createContext, useContext, useCallback } from "react";
+import { useState, createContext, useContext, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import type { AuthResponse, LoginInput, RegisterInput, User } from "@/types/api";
 
 const AUTH_TOKEN_KEY = "animestudioai_token";
 
-export type User = {
-  id: string;
-  email: string;
-  displayName: string | null;
-  credits: number;
-  isAdmin: boolean;
-  roles: string[];
-};
+export type { User } from "@/types/api";
 
 type AuthContextType = {
   user: User | null;
   isLoading: boolean;
   token: string | null;
-  login: (data: any) => Promise<void>;
-  register: (data: any) => Promise<void>;
+  login: (data: LoginInput) => Promise<AuthResponse>;
+  register: (data: RegisterInput) => Promise<AuthResponse>;
   logout: () => void;
   api: (endpoint: string, options?: RequestInit) => Promise<Response>;
 };
@@ -53,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(err.error || res.statusText || "API Error");
       }
 
@@ -62,16 +56,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [token, queryClient, setLocation]
   );
 
-  const { data: user, isLoading } = useQuery({
+  const { data: user, isLoading } = useQuery<User>({
     queryKey: ["user"],
-    queryFn: () => api("/api/auth/me").then((res) => res.json()),
+    queryFn: () => api("/api/auth/me").then((res) => res.json() as Promise<User>),
     enabled: !!token,
     retry: false,
   });
 
-  const loginMutation = useMutation({
-    mutationFn: (data: any) =>
-      api("/api/auth/login", { method: "POST", body: JSON.stringify(data) }).then((res) => res.json()),
+  const loginMutation = useMutation<AuthResponse, Error, LoginInput>({
+    mutationFn: (data) =>
+      api("/api/auth/login", { method: "POST", body: JSON.stringify(data) }).then((res) => res.json() as Promise<AuthResponse>),
     onSuccess: (data) => {
       setToken(data.token);
       localStorage.setItem(AUTH_TOKEN_KEY, data.token);
@@ -80,9 +74,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     },
   });
 
-  const registerMutation = useMutation({
-    mutationFn: (data: any) =>
-      api("/api/auth/register", { method: "POST", body: JSON.stringify(data) }).then((res) => res.json()),
+  const registerMutation = useMutation<AuthResponse, Error, RegisterInput>({
+    mutationFn: (data) =>
+      api("/api/auth/register", { method: "POST", body: JSON.stringify(data) }).then((res) => res.json() as Promise<AuthResponse>),
     onSuccess: (data) => {
       setToken(data.token);
       localStorage.setItem(AUTH_TOKEN_KEY, data.token);
@@ -92,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   const logoutMutation = useMutation({
-    mutationFn: () => api("/api/auth/logout", { method: "POST" }).then((res) => res.json()).catch(() => {}),
+    mutationFn: () => api("/api/auth/logout", { method: "POST" }).then((res) => res.json()).catch(() => undefined),
     onSettled: () => {
       setToken(null);
       localStorage.removeItem(AUTH_TOKEN_KEY);
@@ -104,7 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider
       value={{
-        user: user || null,
+        user: user ?? null,
         isLoading,
         token,
         login: loginMutation.mutateAsync,

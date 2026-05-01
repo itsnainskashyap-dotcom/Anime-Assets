@@ -141,7 +141,6 @@ html, body {
   color-scheme: dark;
 }
 .dark {
-  /* same as above, keep simple for now */
 }
 
 @layer base {

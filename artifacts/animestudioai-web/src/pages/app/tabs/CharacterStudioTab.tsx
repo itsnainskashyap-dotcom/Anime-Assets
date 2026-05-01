@@ -1,31 +1,84 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
-import { useMutation } from "@tanstack/react-query";
-import { User, Lock, Loader2, Play, ChevronRight, ShieldCheck } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { User, Lock, Loader2, ShieldCheck, Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
+import type { Project } from "@/types/api";
 
-export default function CharacterStudioTab({ project }: { project: any }) {
+interface Character {
+  id: string;
+  name: string;
+  role: string;
+  locked: boolean;
+  age?: number | string;
+  height?: string;
+  affiliation?: string;
+  backstory?: string;
+  modelSheetUrl?: string;
+  expressions?: Array<{ id: string; name: string; url?: string }>;
+}
+
+export default function CharacterStudioTab({ project }: { project: Project }) {
   const { api } = useAuth();
-  const [selectedCharacter, setSelectedCharacter] = useState<any>(null);
+  const queryClient = useQueryClient();
+  const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
+
+  const { data: characters, isLoading, error } = useQuery<Character[]>({
+    queryKey: ["projects", project.id, "characters"],
+    queryFn: async () => {
+      try {
+        const res = await api(`/api/projects/${project.id}/characters`);
+        return (await res.json()) as Character[];
+      } catch (err) {
+        if ((err as Error).message?.toLowerCase().includes("not found")) return [];
+        throw err;
+      }
+    },
+  });
+
+  const generateCharacters = useMutation({
+    mutationFn: () => api(`/api/projects/${project.id}/characters/generate`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", project.id, "characters"] }),
+  });
 
   const approveLock = useMutation({
     mutationFn: () => api(`/api/projects/${project.id}/characters/approve-lock`, { method: "POST" }),
   });
 
-  // Mock characters
-  const characters = [
-    { id: 1, name: "Kaelen", role: "Protagonist", locked: false },
-    { id: 2, name: "Elara", role: "Rogue Archivist", locked: true },
-  ];
+  if (isLoading) {
+    return <div className="p-8 text-muted-foreground">Loading…</div>;
+  }
+  if (error) {
+    return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
+  }
+  if (!characters || characters.length === 0) {
+    return (
+      <div className="p-8 flex flex-col items-start gap-4 text-muted-foreground">
+        <p>No characters yet.</p>
+        <Button
+          className="gap-2"
+          onClick={() => generateCharacters.mutate()}
+          disabled={generateCharacters.isPending}
+        >
+          {generateCharacters.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          Generate Characters
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex gap-1">
-      {/* Left Sidebar */}
       <div className="w-[300px] border-r border-border/50 bg-card/30 flex flex-col p-4">
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-bold">Characters</h3>
-          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={() => generateCharacters.mutate()}
+            disabled={generateCharacters.isPending}
+          >
             <Plus className="w-4 h-4" />
           </Button>
         </div>
@@ -47,8 +100,8 @@ export default function CharacterStudioTab({ project }: { project: any }) {
         </div>
 
         <div className="mt-auto pt-4">
-          <Button 
-            className="w-full gap-2" 
+          <Button
+            className="w-full gap-2"
             onClick={() => approveLock.mutate()}
             disabled={approveLock.isPending}
           >
@@ -58,7 +111,6 @@ export default function CharacterStudioTab({ project }: { project: any }) {
         </div>
       </div>
 
-      {/* Right Content */}
       <div className="flex-1 bg-background/30 p-8 overflow-auto scrollbar-none">
         {selectedCharacter ? (
           <div className="max-w-4xl mx-auto space-y-8">
@@ -77,15 +129,23 @@ export default function CharacterStudioTab({ project }: { project: any }) {
             <div className="grid grid-cols-3 gap-6">
               <div className="col-span-2 space-y-6">
                 <div className="aspect-[16/9] rounded-xl bg-card border border-border/50 overflow-hidden flex items-center justify-center relative">
-                   <div className="absolute inset-0 flex items-center justify-center text-muted-foreground/30 font-bold text-2xl tracking-widest uppercase">
-                     MODEL SHEET (3-QUARTER)
-                   </div>
+                  {selectedCharacter.modelSheetUrl ? (
+                    <img src={selectedCharacter.modelSheetUrl} alt={selectedCharacter.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center text-muted-foreground/30 font-bold text-2xl tracking-widest uppercase">
+                      Model sheet pending
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-4 gap-4">
-                  {[1, 2, 3, 4].map(i => (
-                     <div key={i} className="aspect-square rounded-lg bg-card border border-border/50 flex items-center justify-center">
-                       <span className="text-xs text-muted-foreground uppercase font-semibold">Expression {i}</span>
-                     </div>
+                  {(selectedCharacter.expressions ?? []).map(ex => (
+                    <div key={ex.id} className="aspect-square rounded-lg bg-card border border-border/50 flex items-center justify-center overflow-hidden">
+                      {ex.url ? (
+                        <img src={ex.url} alt={ex.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-xs text-muted-foreground uppercase font-semibold">{ex.name}</span>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -94,27 +154,33 @@ export default function CharacterStudioTab({ project }: { project: any }) {
                 <div className="p-4 rounded-xl border border-border/50 bg-card/50">
                   <h4 className="font-semibold text-sm mb-3 uppercase tracking-wider text-muted-foreground">Traits</h4>
                   <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Age</span>
-                      <span>24</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Height</span>
-                      <span>175 cm</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Affiliation</span>
-                      <span>Rogue</span>
-                    </div>
+                    {selectedCharacter.age !== undefined && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Age</span>
+                        <span>{selectedCharacter.age}</span>
+                      </div>
+                    )}
+                    {selectedCharacter.height && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Height</span>
+                        <span>{selectedCharacter.height}</span>
+                      </div>
+                    )}
+                    {selectedCharacter.affiliation && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Affiliation</span>
+                        <span>{selectedCharacter.affiliation}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl border border-border/50 bg-card/50">
-                  <h4 className="font-semibold text-sm mb-3 uppercase tracking-wider text-muted-foreground">Backstory</h4>
-                  <p className="text-sm text-muted-foreground leading-relaxed">
-                    A former archivist who discovered a memory that didn't belong to anyone...
-                  </p>
-                </div>
+                {selectedCharacter.backstory && (
+                  <div className="p-4 rounded-xl border border-border/50 bg-card/50">
+                    <h4 className="font-semibold text-sm mb-3 uppercase tracking-wider text-muted-foreground">Backstory</h4>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{selectedCharacter.backstory}</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -126,14 +192,5 @@ export default function CharacterStudioTab({ project }: { project: any }) {
         )}
       </div>
     </div>
-  );
-}
-
-// Dummy Plus for the button
-function Plus(props: any) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M5 12h14"/><path d="M12 5v14"/>
-    </svg>
   );
 }

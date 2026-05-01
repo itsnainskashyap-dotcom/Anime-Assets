@@ -5,25 +5,35 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+interface FailedJobRow {
+  id: string;
+  type: string;
+  error?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export default function AdminFailedGenerations() {
   const { api } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
 
-  const { data: failures = [], isLoading } = useQuery({
+  const { data: failures = [], isLoading, error: queryError } = useQuery<FailedJobRow[]>({
     queryKey: ["admin-failed-generations"],
-    queryFn: () => api("/api/admin/failed-generations").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/failed-generations").then(res => res.json() as Promise<FailedJobRow[]>).catch(() => [] as FailedJobRow[]),
   });
 
-  const retryJob = useMutation({
-    mutationFn: (id: string) => api(`/api/admin/jobs/${id}/retry`, { method: "POST" }),
+  const retryJob = useMutation<unknown, Error, string>({
+    mutationFn: (id) => api(`/api/admin/jobs/${id}/retry`, { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-failed-generations"] })
   });
 
-  const filteredFailures = failures.filter((f: any) => 
-    f.id.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredFailures = failures.filter((f) =>
+    f.id.toLowerCase().includes(search.toLowerCase()) ||
     (f.error && f.error.toLowerCase().includes(search.toLowerCase()))
   );
+
+  if (queryError) return <div className="p-8 text-destructive">Failed to load: {(queryError as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
@@ -63,7 +73,7 @@ export default function AdminFailedGenerations() {
             {isLoading ? (
               <tr><td colSpan={5} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
             ) : filteredFailures.length > 0 ? (
-              filteredFailures.map((job: any) => (
+              filteredFailures.map((job) => (
                 <tr key={job.id} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-mono text-xs">{job.id.substring(0, 8)}...</td>
                   <td className="px-4 py-3 capitalize font-medium">{job.type}</td>

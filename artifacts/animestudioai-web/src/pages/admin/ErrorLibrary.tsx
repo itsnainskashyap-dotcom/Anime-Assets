@@ -4,19 +4,28 @@ import { Bug, Search, Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Input } from "@/components/ui/input";
 
+interface ErrorLibraryRow {
+  code: string;
+  message: string;
+  category?: string;
+  resolution?: string;
+}
+
 export default function AdminErrorLibrary() {
   const { api } = useAuth();
   const [search, setSearch] = useState("");
 
-  const { data: errors = [], isLoading } = useQuery({
+  const { data: errors = [], isLoading, error } = useQuery<ErrorLibraryRow[]>({
     queryKey: ["admin-errors"],
-    queryFn: () => api("/api/admin/error-library").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/error-library").then(res => res.json() as Promise<ErrorLibraryRow[]>).catch(() => [] as ErrorLibraryRow[]),
   });
 
-  const filteredErrors = errors.filter((e: any) => 
-    e.code?.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredErrors = errors.filter((e) =>
+    e.code?.toLowerCase().includes(search.toLowerCase()) ||
     e.message?.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
@@ -53,7 +62,7 @@ export default function AdminErrorLibrary() {
             {isLoading ? (
               <tr><td colSpan={4} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
             ) : filteredErrors.length > 0 ? (
-              filteredErrors.map((error: any, i: number) => (
+              filteredErrors.map((error, i) => (
                 <tr key={i} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-mono text-xs text-destructive">{error.code}</td>
                   <td className="px-4 py-3 font-medium">{error.message}</td>

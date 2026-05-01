@@ -3,11 +3,21 @@ import { motion } from "framer-motion";
 import { Mountain, Loader2, Plus, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
+import type { Project } from "@/types/api";
 
-export default function EnvironmentsTab({ project }: { project: any }) {
-  const [selectedEnv, setSelectedEnv] = useState<any>(null);
+interface Environment {
+  id: number;
+  name: string;
+  type: string;
+  lighting: string;
+  weather: string;
+  timeOfDay: string;
+}
 
-  const environments = [
+export default function EnvironmentsTab({ project }: { project: Project }) {
+  const [selectedEnv, setSelectedEnv] = useState<Environment | null>(null);
+
+  const environments: Environment[] = [
     { id: 1, name: "The Canopy", type: "Cityscape", lighting: "Neon, High Contrast", weather: "Constant Rain", timeOfDay: "Night" },
     { id: 2, name: "The Stems", type: "Industrial", lighting: "Dim, Flickering", weather: "Foggy", timeOfDay: "Any" }
   ];

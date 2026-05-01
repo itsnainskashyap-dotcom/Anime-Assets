@@ -26,12 +26,14 @@ export default function Signup() {
     defaultValues: { displayName: "", email: "", password: "" }
   });
 
-  const onSubmit = async (data: any) => {
+  type SignupFormData = z.infer<typeof signupSchema>;
+
+  const onSubmit = async (data: SignupFormData) => {
     setError(null);
     try {
       await signupUser(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to sign up");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to sign up");
     }
   };
 

@@ -44,7 +44,7 @@ export default function CreateProject() {
     storyPrompt: "",
   });
 
-  const updateForm = (key: string, value: any) => {
+  const updateForm = <K extends keyof typeof formData>(key: K, value: (typeof formData)[K]) => {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 

@@ -5,26 +5,47 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+interface AdminOrder {
+  id: string;
+  userId: string;
+  amount_paise: number;
+  currency: string;
+  createdAt: string;
+}
+
+interface AdminBillingResponse {
+  revenue: number;
+  orders: AdminOrder[];
+}
+
+interface RefundInput {
+  userId: string;
+  credits: string;
+  reason: string;
+}
+
 export default function AdminBilling() {
   const { api } = useAuth();
   const queryClient = useQueryClient();
-  const [refundData, setRefundData] = useState({ userId: "", credits: "", reason: "" });
+  const [refundData, setRefundData] = useState<RefundInput>({ userId: "", credits: "", reason: "" });
 
-  const { data: billing = {}, isLoading } = useQuery({
+  const { data: billing = { revenue: 0, orders: [] }, isLoading, error } = useQuery<AdminBillingResponse>({
     queryKey: ["admin-billing"],
-    queryFn: () => api("/api/admin/billing").then(res => res.json()).catch(() => ({ revenue: 0, orders: [] })),
+    queryFn: () => api("/api/admin/billing").then(res => res.json() as Promise<AdminBillingResponse>).catch(() => ({ revenue: 0, orders: [] })),
   });
 
-  const issueRefund = useMutation({
-    mutationFn: (data: any) => api("/api/admin/refund", { 
-      method: "POST", 
-      body: JSON.stringify({ ...data, credits: parseInt(data.credits) }) 
+  const issueRefund = useMutation<unknown, Error, RefundInput>({
+    mutationFn: (data) => api("/api/admin/refund", {
+      method: "POST",
+      body: JSON.stringify({ ...data, credits: parseInt(data.credits) }),
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-billing"] });
       setRefundData({ userId: "", credits: "", reason: "" });
     }
   });
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
@@ -94,7 +115,7 @@ export default function AdminBilling() {
                 {isLoading ? (
                   <tr><td colSpan={4} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
                 ) : billing.orders?.length > 0 ? (
-                  billing.orders.map((o: any) => (
+                  billing.orders.map((o) => (
                     <tr key={o.id} className="hover:bg-muted/20">
                       <td className="px-4 py-3 font-mono text-xs">{o.id}</td>
                       <td className="px-4 py-3">{o.userId}</td>

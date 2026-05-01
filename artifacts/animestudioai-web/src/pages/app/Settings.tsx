@@ -13,7 +13,8 @@ export default function Settings() {
   const [success, setSuccess] = useState(false);
 
   const updateProfile = useMutation({
-    mutationFn: (data: any) => api("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) }).then(res => res.json()),
+    mutationFn: (data: { displayName?: string }) =>
+      api("/api/auth/me", { method: "PATCH", body: JSON.stringify(data) }).then(res => res.json()),
     onSuccess: (data) => {
       queryClient.setQueryData(["user"], data);
       setSuccess(true);

@@ -3,12 +3,23 @@ import { Server, Activity, CheckCircle2, XCircle, Loader2, RefreshCcw } from "lu
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 
+interface ProviderHealthRow {
+  name: string;
+  status: string;
+  latency?: number;
+  uptime?: string | number;
+  errorRate?: string | number;
+  activeConnections?: number;
+}
+
 export default function AdminProviderHealth() {
   const { api } = useAuth();
-  const { data: health = [], isLoading, refetch, isRefetching } = useQuery({
+  const { data: health = [], isLoading, refetch, isRefetching, error } = useQuery<ProviderHealthRow[]>({
     queryKey: ["provider-health"],
-    queryFn: () => api("/api/admin/provider-health").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/provider-health").then(res => res.json() as Promise<ProviderHealthRow[]>).catch(() => [] as ProviderHealthRow[]),
   });
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
@@ -26,7 +37,7 @@ export default function AdminProviderHealth() {
         {isLoading ? (
           [1, 2, 3].map(i => <div key={i} className="h-48 rounded-xl bg-card border border-border/50 animate-pulse" />)
         ) : health.length > 0 ? (
-          health.map((provider: any) => (
+          health.map((provider) => (
             <div key={provider.name} className="bg-card border border-border/50 rounded-xl p-6">
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">

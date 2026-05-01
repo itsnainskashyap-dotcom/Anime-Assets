@@ -4,19 +4,29 @@ import { FileText, Search, Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Input } from "@/components/ui/input";
 
+interface AuditLogRow {
+  id?: string;
+  action: string;
+  userId: string;
+  createdAt: string;
+  details?: unknown;
+}
+
 export default function AdminAuditLogs() {
   const { api } = useAuth();
   const [search, setSearch] = useState("");
 
-  const { data: logs = [], isLoading } = useQuery({
+  const { data: logs = [], isLoading, error } = useQuery<AuditLogRow[]>({
     queryKey: ["admin-audit-logs"],
-    queryFn: () => api("/api/admin/audit-logs").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/audit-logs").then(res => res.json() as Promise<AuditLogRow[]>).catch(() => [] as AuditLogRow[]),
   });
 
-  const filteredLogs = logs.filter((l: any) => 
-    l.action.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredLogs = logs.filter((l) =>
+    l.action.toLowerCase().includes(search.toLowerCase()) ||
     l.userId.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">

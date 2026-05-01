@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Download, Share2, Settings, FileVideo, FileText, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { Download, Share2, Settings, FileVideo, FileText, Loader2, Play, Sparkles, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/hooks/use-auth";
+import type { Project } from "@/types/api";
 
-export default function ExportTab({ project }: { project: any }) {
+export default function ExportTab({ project }: { project: Project }) {
   const [exporting, setExporting] = useState(false);
   const [format, setFormat] = useState({
     mp4: true,
@@ -124,12 +125,4 @@ export default function ExportTab({ project }: { project: any }) {
       </div>
     </div>
   );
-}
-
-function Play(props: any) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <polygon points="6 3 20 12 6 21 6 3"/>
-    </svg>
-  )
 }

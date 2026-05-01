@@ -11,7 +11,7 @@ export default function ProjectsLibrary() {
   const { data: projects = [], isLoading } = useProjects();
   const [search, setSearch] = useState("");
 
-  const filteredProjects = projects.filter((p: any) => 
+  const filteredProjects = projects.filter((p) => 
     p.title.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -53,7 +53,7 @@ export default function ProjectsLibrary() {
           </div>
         ) : filteredProjects.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredProjects.map((project: any, i: number) => (
+            {filteredProjects.map((project, i) => (
               <motion.div
                 key={project.id}
                 initial={{ opacity: 0, scale: 0.95 }}

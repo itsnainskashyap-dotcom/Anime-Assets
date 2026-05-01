@@ -3,11 +3,28 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { CreditCard, History, Zap, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
+import type { CreditPack, PaymentOrder, CreateOrderResponse } from "@/types/api";
 
-// Type declaration for Razorpay to prevent TS errors
+interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  order_id: string;
+  handler: (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => void;
+  prefill: { name: string; email: string };
+  theme: { color: string };
+}
+
+interface RazorpayInstance {
+  open: () => void;
+  on: (event: "payment.failed", cb: (response: { error: { description: string; code?: string } }) => void) => void;
+}
+
 declare global {
   interface Window {
-    Razorpay: any;
+    Razorpay?: new (options: RazorpayOptions) => RazorpayInstance;
   }
 }
 
@@ -27,18 +44,18 @@ export default function Billing() {
     }
   }, []);
 
-  const { data: packs = [], isLoading: loadingPacks } = useQuery({
+  const { data: packs = [], isLoading: loadingPacks, error: packsError } = useQuery<CreditPack[]>({
     queryKey: ["credit-packs"],
     queryFn: () => api("/api/payments/credit-packs").then(res => res.json()),
   });
 
-  const { data: history = [], isLoading: loadingHistory, refetch: refetchHistory } = useQuery({
+  const { data: history = [], isLoading: loadingHistory, error: historyError, refetch: refetchHistory } = useQuery<PaymentOrder[]>({
     queryKey: ["payment-history"],
     queryFn: () => api("/api/payments/history").then(res => res.json()),
   });
 
   const createOrder = useMutation({
-    mutationFn: (packId: string) => api("/api/payments/create-order", {
+    mutationFn: (packId: string): Promise<CreateOrderResponse> => api("/api/payments/create-order", {
       method: "POST",
       body: JSON.stringify({ packId })
     }).then(res => res.json())
@@ -60,11 +77,9 @@ export default function Billing() {
         name: "AnimeStudioAI",
         description: "Credit Pack Purchase",
         order_id: order.orderId,
-        handler: function(response: any) {
-          // Webhook handles fulfillment, we just refetch
+        handler: function() {
           setTimeout(() => {
             refetchHistory();
-            // In a real app we'd also force refetch user via queryClient to update top-bar credits
             window.location.reload();
           }, 2000);
         },
@@ -78,13 +93,13 @@ export default function Billing() {
       };
 
       const rzp = new window.Razorpay(options);
-      rzp.on('payment.failed', function (response: any) {
+      rzp.on('payment.failed', function (response) {
         console.error(response.error);
         alert("Payment failed: " + response.error.description);
       });
       rzp.open();
-    } catch (err: any) {
-      alert("Failed to initiate purchase: " + err.message);
+    } catch (err) {
+      alert("Failed to initiate purchase: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -112,9 +127,9 @@ export default function Billing() {
           {loadingPacks ? (
             [1, 2, 3].map(i => <div key={i} className="h-64 rounded-xl bg-card border border-border/50 animate-pulse" />)
           ) : (
-            packs.map((pack: any) => (
+            packs.map((pack) => (
               <div key={pack.id} className="rounded-xl border border-border/50 bg-card p-6 flex flex-col relative overflow-hidden">
-                {pack.bonus_credits > 0 && (
+                {(pack.bonus_credits ?? 0) > 0 && (
                   <div className="absolute top-0 right-0 bg-primary text-primary-foreground text-xs font-bold px-3 py-1 rounded-bl-lg">
                     +{pack.bonus_credits} BONUS
                   </div>
@@ -129,10 +144,10 @@ export default function Billing() {
                     <Check className="w-4 h-4 text-primary" />
                     <span>{pack.credits.toLocaleString()} Base Credits</span>
                   </div>
-                  {pack.bonus_credits > 0 && (
+                  {(pack.bonus_credits ?? 0) > 0 && (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Check className="w-4 h-4 text-primary" />
-                      <span>{pack.bonus_credits.toLocaleString()} Bonus Credits</span>
+                      <span>{pack.bonus_credits!.toLocaleString()} Bonus Credits</span>
                     </div>
                   )}
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -169,11 +184,13 @@ export default function Billing() {
             <tbody className="divide-y divide-border/50">
               {loadingHistory ? (
                 <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">Loading...</td></tr>
+              ) : historyError ? (
+                <tr><td colSpan={4} className="px-4 py-8 text-center text-destructive">Failed to load history.</td></tr>
               ) : history.length > 0 ? (
-                history.map((tx: any) => (
+                history.map((tx) => (
                   <tr key={tx.id} className="hover:bg-muted/20">
-                    <td className="px-4 py-3">{new Date(tx.createdAt).toLocaleDateString()}</td>
-                    <td className="px-4 py-3">{tx.pack?.name || 'Credit Pack'}</td>
+                    <td className="px-4 py-3">{new Date(tx.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3">Credit Pack</td>
                     <td className="px-4 py-3 font-medium">{(tx.amount_paise / 100).toLocaleString('en-IN', { style: 'currency', currency: tx.currency })}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${tx.status === 'paid' ? 'bg-primary/20 text-primary' : 'bg-secondary text-muted-foreground'}`}>

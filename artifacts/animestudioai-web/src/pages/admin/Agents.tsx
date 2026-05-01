@@ -5,19 +5,31 @@ import { useAuth } from "@/hooks/use-auth";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
+interface AgentRun {
+  id: string;
+  agentName: string;
+  projectId: string;
+  status: string;
+  startedAt?: string;
+  createdAt?: string;
+  durationSec?: number;
+}
+
 export default function AdminAgents() {
   const { api } = useAuth();
   const [search, setSearch] = useState("");
 
-  const { data: runs = [], isLoading } = useQuery({
+  const { data: runs = [], isLoading, error } = useQuery<AgentRun[]>({
     queryKey: ["admin-agents"],
-    queryFn: () => api("/api/admin/agent-runs").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/agent-runs").then(res => res.json() as Promise<AgentRun[]>).catch(() => [] as AgentRun[]),
   });
 
-  const filteredRuns = runs.filter((r: any) => 
-    r.agentName.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredRuns = runs.filter((r) =>
+    r.agentName.toLowerCase().includes(search.toLowerCase()) ||
     r.projectId.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">

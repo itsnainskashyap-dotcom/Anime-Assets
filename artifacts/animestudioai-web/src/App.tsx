@@ -36,7 +36,9 @@ import AdminErrorLibrary from "@/pages/admin/ErrorLibrary";
 
 const queryClient = new QueryClient();
 
-function ProtectedRoute({ component: Component, adminOnly = false, ...rest }: any) {
+type RouteProps = { component: React.ComponentType; adminOnly?: boolean };
+
+function ProtectedRoute({ component: Component, adminOnly = false }: RouteProps) {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
@@ -51,10 +53,10 @@ function ProtectedRoute({ component: Component, adminOnly = false, ...rest }: an
     return <Redirect to="/app" />;
   }
 
-  return <Component {...rest} />;
+  return <Component />;
 }
 
-function AppRoute({ component: Component, adminOnly = false }: any) {
+function AppRoute({ component: Component, adminOnly = false }: RouteProps) {
   return (
     <AppShell>
       <ProtectedRoute component={Component} adminOnly={adminOnly} />

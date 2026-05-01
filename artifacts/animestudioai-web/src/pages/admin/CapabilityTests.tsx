@@ -4,19 +4,28 @@ import { Play, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 
+interface CapabilityTestRow {
+  provider: string;
+  capability: string;
+  status: string;
+  lastRun?: string;
+}
+
 export default function AdminCapabilityTests() {
   const { api } = useAuth();
   const queryClient = useQueryClient();
 
-  const { data: tests = [], isLoading } = useQuery({
+  const { data: tests = [], isLoading, error } = useQuery<CapabilityTestRow[]>({
     queryKey: ["capability-tests"],
-    queryFn: () => api("/api/admin/provider-capability-tests").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/provider-capability-tests").then(res => res.json() as Promise<CapabilityTestRow[]>).catch(() => [] as CapabilityTestRow[]),
   });
 
   const runTests = useMutation({
     mutationFn: () => api("/api/admin/provider-capability-tests/run", { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["capability-tests"] })
   });
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-5xl mx-auto w-full space-y-8">
@@ -45,7 +54,7 @@ export default function AdminCapabilityTests() {
             {isLoading ? (
               <tr><td colSpan={4} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
             ) : tests.length > 0 ? (
-              tests.map((test: any, i: number) => (
+              tests.map((test, i) => (
                 <tr key={i} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-medium capitalize">{test.provider}</td>
                   <td className="px-4 py-3 capitalize">{test.capability}</td>

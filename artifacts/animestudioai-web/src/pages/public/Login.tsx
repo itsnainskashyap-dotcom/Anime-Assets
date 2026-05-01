@@ -25,12 +25,14 @@ export default function Login() {
     defaultValues: { email: "", password: "" }
   });
 
-  const onSubmit = async (data: any) => {
+  type LoginFormData = z.infer<typeof loginSchema>;
+
+  const onSubmit = async (data: LoginFormData) => {
     setError(null);
     try {
       await login(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to login");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to login");
     }
   };
 

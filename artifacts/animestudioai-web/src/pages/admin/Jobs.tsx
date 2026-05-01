@@ -6,26 +6,36 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
+interface JobRow {
+  id: string;
+  type: string;
+  status: string;
+  progress?: number;
+  createdAt: string;
+}
+
 export default function AdminJobs() {
   const { api } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
 
-  const { data: jobs = [], isLoading } = useQuery({
+  const { data: jobs = [], isLoading, error } = useQuery<JobRow[]>({
     queryKey: ["admin-jobs"],
-    queryFn: () => api("/api/admin/jobs?limit=50").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/jobs?limit=50").then(res => res.json() as Promise<JobRow[]>).catch(() => [] as JobRow[]),
   });
 
-  const jobAction = useMutation({
-    mutationFn: ({ id, action }: { id: string, action: string }) => api(`/api/admin/jobs/${id}/${action}`, { method: "POST" }),
+  const jobAction = useMutation<unknown, Error, { id: string; action: string }>({
+    mutationFn: ({ id, action }) => api(`/api/admin/jobs/${id}/${action}`, { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-jobs"] })
   });
 
-  const filteredJobs = jobs.filter((j: any) => 
-    j.id.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredJobs = jobs.filter((j) =>
+    j.id.toLowerCase().includes(search.toLowerCase()) ||
     (j.type && j.type.toLowerCase().includes(search.toLowerCase())) ||
     (j.status && j.status.toLowerCase().includes(search.toLowerCase()))
   );
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
@@ -70,7 +80,7 @@ export default function AdminJobs() {
             {isLoading ? (
               <tr><td colSpan={6} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
             ) : filteredJobs.length > 0 ? (
-              filteredJobs.map((job: any) => (
+              filteredJobs.map((job) => (
                 <tr key={job.id} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-mono text-xs">{job.id.substring(0, 8)}...</td>
                   <td className="px-4 py-3 capitalize font-medium">{job.type}</td>

@@ -5,19 +5,29 @@ import { useAuth } from "@/hooks/use-auth";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
+interface MemoryConflictRow {
+  projectId: string;
+  key: string;
+  type?: string;
+  resolution?: string;
+  timestamp?: string;
+}
+
 export default function AdminMemory() {
   const { api } = useAuth();
   const [search, setSearch] = useState("");
 
-  const { data: conflicts = [], isLoading } = useQuery({
+  const { data: conflicts = [], isLoading, error } = useQuery<MemoryConflictRow[]>({
     queryKey: ["admin-memory"],
-    queryFn: () => api("/api/admin/memory-conflicts").then(res => res.json()).catch(() => []),
+    queryFn: () => api("/api/admin/memory-conflicts").then(res => res.json() as Promise<MemoryConflictRow[]>).catch(() => [] as MemoryConflictRow[]),
   });
 
-  const filteredConflicts = conflicts.filter((c: any) => 
-    c.projectId.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredConflicts = conflicts.filter((c) =>
+    c.projectId.toLowerCase().includes(search.toLowerCase()) ||
     c.key.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (error) return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
 
   return (
     <div className="p-8 max-w-6xl mx-auto w-full space-y-8">
@@ -55,7 +65,7 @@ export default function AdminMemory() {
             {isLoading ? (
               <tr><td colSpan={5} className="px-4 py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
             ) : filteredConflicts.length > 0 ? (
-              filteredConflicts.map((c: any, i: number) => (
+              filteredConflicts.map((c, i) => (
                 <tr key={i} className="hover:bg-muted/20">
                   <td className="px-4 py-3 font-mono text-xs">{c.projectId}</td>
                   <td className="px-4 py-3 font-mono text-xs text-primary">{c.key}</td>
