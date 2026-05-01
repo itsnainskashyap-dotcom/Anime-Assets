@@ -3,7 +3,7 @@ import { v4 as uuid } from "uuid";
 import db from "../db/index.js";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { generationLimiter } from "../middleware/rateLimit.js";
-import { enqueueTask } from "../services/queue.js";
+import { enqueueTask, enqueueStageOnce, findInflightStage } from "../services/queue.js";
 import { recordPlaygroundEvent } from "../services/playgroundEvents.js";
 import { loadMemory } from "../services/productionMemory.js";
 import { approveLock, assertNotLocked } from "../services/characterConsistencyLock.js";
@@ -71,14 +71,16 @@ router.delete("/:id", requireAuth, (req, res) => {
 });
 
 function enqueueGenerationStage(stageType: string, projectId: string, userId: string, payload: Record<string, unknown> = {}) {
-  const idemKey = `${projectId}:${stageType}:${Date.now()}`;
-  const task = enqueueTask({
+  // Use enqueueStageOnce so a double-click or re-trigger while a task is still
+  // in-flight just returns the existing one — never duplicates expensive work.
+  // After the task completes, a fresh manual click WILL enqueue a new task
+  // (legitimate re-run of an approved stage).
+  const task = enqueueStageOnce({
     type: stageType,
     stage: stageType,
     projectId,
     userId,
     payload,
-    idempotencyKey: idemKey,
   });
   recordPlaygroundEvent({
     projectId,
@@ -93,6 +95,14 @@ router.post("/:id/story-bible/generate", requireAuth, generationLimiter, (req, r
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+  // Credit-saving: if a story_bible_generate is already in-flight, return that
+  // task without re-debiting credits or enqueueing duplicate work.
+  const inflight = findInflightStage(p.id, "story_bible_generate");
+  let bible = db.prepare("SELECT * FROM story_bibles WHERE project_id = ?").get(p.id);
+  if (inflight) {
+    res.status(202).json({ jobId: inflight.id, status: inflight.status, storyBible: bible, deduped: true });
+    return;
+  }
   try {
     debitCredits(u.sub, "story_bible_generate", { id: p.id, type: "project" });
   } catch (err) {
@@ -100,7 +110,6 @@ router.post("/:id/story-bible/generate", requireAuth, generationLimiter, (req, r
     res.status(e.statusCode || 500).json({ error: e.message });
     return;
   }
-  let bible = db.prepare("SELECT * FROM story_bibles WHERE project_id = ?").get(p.id);
   if (!bible) {
     const bid = uuid();
     db.prepare("INSERT INTO story_bibles (id, project_id, status) VALUES (?, ?, 'generating')").run(bid, p.id);
@@ -125,6 +134,11 @@ router.post("/:id/characters/generate", requireAuth, generationLimiter, (req, re
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+  const inflight = findInflightStage(p.id, "character_generate");
+  if (inflight) {
+    res.status(202).json({ jobId: inflight.id, status: inflight.status, deduped: true });
+    return;
+  }
   try {
     debitCredits(u.sub, "character_generate", { id: p.id, type: "project" });
   } catch (err) {
@@ -159,6 +173,11 @@ router.post("/:id/storyboard/generate", requireAuth, generationLimiter, (req, re
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+  const inflight = findInflightStage(p.id, "storyboard_generate");
+  if (inflight) {
+    res.status(202).json({ jobId: inflight.id, status: inflight.status, deduped: true });
+    return;
+  }
   try {
     debitCredits(u.sub, "storyboard_generate", { id: p.id, type: "project" });
   } catch (err) {
@@ -174,6 +193,11 @@ router.post("/:id/visualization/generate", requireAuth, generationLimiter, (req,
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+  const inflight = findInflightStage(p.id, "visualization_generate");
+  if (inflight) {
+    res.status(202).json({ jobId: inflight.id, status: inflight.status, deduped: true });
+    return;
+  }
   try {
     debitCredits(u.sub, "visualization_generate", { id: p.id, type: "project" });
   } catch (err) {
@@ -209,6 +233,11 @@ router.post("/:id/production/start", requireAuth, generationLimiter, (req, res) 
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+  const inflight = findInflightStage(p.id, "production_pipeline");
+  if (inflight) {
+    res.json({ ok: true, jobId: inflight.id, deduped: true });
+    return;
+  }
   db.prepare("UPDATE projects SET status='producing', current_stage='production_start' WHERE id = ?").run(p.id);
   const task = enqueueGenerationStage("production_pipeline", p.id, u.sub, {});
   recordPlaygroundEvent({ projectId: p.id, eventType: "production_started", message: "Production started" });

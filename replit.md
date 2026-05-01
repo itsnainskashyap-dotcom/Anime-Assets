@@ -129,3 +129,28 @@ api-server artifact intentionally diverges from the workspace defaults:
 - **Web preview port**: `Start application` workflow runs vite on
   `PORT=18134` to match the artifact's `localPort` so the workspace
   preview iframe resolves correctly.
+- **Fully autonomous pipeline** (`jobs/handlers.ts`): when the user
+  submits the create-project wizard, `CreateProject.handleSubmit` POSTs
+  to `/story-bible/generate` once. From there, every stage handler
+  enqueues the next stage on success — `story_bible_generate ➜
+  character_generate ➜ storyboard_generate ➜ visualization_generate ➜
+  production_pipeline`. The user does not click any "Generate" button
+  to advance the pipeline; only `production/start`,
+  `story-bible/approve`, and `characters/approve-lock` remain as
+  optional manual gates.
+- **Credit-saving idempotency** (`services/queue.ts` +
+  `routes/projects.ts`): all auto-chain enqueues use the new
+  `enqueueStageOnce({ projectId, type, ... })` helper which checks
+  `findInflightStage(projectId, type)` first. If a same-(project,type)
+  task is in `queued|in_progress|processing|paused`, the existing task
+  is returned and no new task is created. Manual generate routes
+  (`story-bible/generate`, `characters/generate`,
+  `storyboard/generate`, `visualization/generate`,
+  `production/start`) call `findInflightStage` BEFORE
+  `debitCredits(...)` and short-circuit with HTTP 202
+  `{ deduped: true }` when an in-flight task exists, preventing
+  double-debit on double-clicks. After a stage completes,
+  `enqueueStageOnce` does NOT use a stable idempotency key, so a fresh
+  manual click after completion legitimately starts a new run. Race-free
+  in our single-Node + better-sqlite (synchronous) runtime; would need a
+  DB-level uniqueness constraint if horizontally scaled.

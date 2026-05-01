@@ -43,6 +43,40 @@ export interface JobTaskRow {
   updated_at: string;
 }
 
+/**
+ * Returns an existing in-flight (queued/in_progress/processing/paused) task of the
+ * same type for the given project, if any. Useful as a credit-saving guard before
+ * enqueueing expensive duplicate work.
+ */
+export function findInflightStage(projectId: string, type: string): JobTaskRow | null {
+  return (
+    db
+      .prepare<[string, string], JobTaskRow>(
+        `SELECT * FROM job_tasks
+         WHERE project_id = ? AND type = ?
+           AND status IN ('queued','in_progress','processing','paused')
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(projectId, type) ?? null
+  );
+}
+
+/**
+ * Enqueue a project-stage task at most once. If an in-flight task of the same
+ * (project, type) exists, returns it without enqueueing a new one. Use this for
+ * auto-chained pipeline stages so that retries / re-runs / manual clicks do not
+ * stack duplicate expensive jobs.
+ */
+export function enqueueStageOnce(opts: EnqueueOptions & { projectId: string }): JobTaskRow {
+  const inflight = findInflightStage(opts.projectId, opts.type);
+  if (inflight) return inflight;
+  // Do NOT pass a stable idempotency key here — that would collide with a previous
+  // COMPLETED task of the same (project,type) and silently return the old row,
+  // blocking legitimate re-runs after completion. The in-flight guard above is
+  // enough to prevent duplicate concurrent work; let enqueueTask generate a fresh row.
+  return enqueueTask(opts);
+}
+
 export function enqueueTask(opts: EnqueueOptions): JobTaskRow {
   if (opts.idempotencyKey) {
     const existing = db

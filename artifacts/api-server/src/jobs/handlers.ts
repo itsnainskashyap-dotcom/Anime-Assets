@@ -12,7 +12,7 @@ import { generateVideo } from "../providers/videoProvider.js";
 import { generateMusic, generateTts, applyLipSync } from "../providers/audioProviders.js";
 import { notify } from "../services/notifications.js";
 import { validateVisual } from "../providers/visionProvider.js";
-import { enqueueTask, type JobTaskRow } from "../services/queue.js";
+import { enqueueTask, enqueueStageOnce, type JobTaskRow } from "../services/queue.js";
 import { saveBuffer, STORAGE_ROOT_PATH } from "../providers/storageProvider.js";
 import { safeFetch } from "../lib/safeFetch.js";
 import ffmpegPath from "ffmpeg-static";
@@ -238,15 +238,14 @@ JSON SCHEMA
   });
   setProjectStage(task.project_id, "story_bible_ready", 15);
 
-  // Auto-chain: immediately kick off character generation
+  // Auto-chain: immediately kick off character generation (dedupe in-flight to save credits)
   if ((data.characters?.length || 0) > 0) {
-    enqueueTask({
+    enqueueStageOnce({
       type: "character_generate",
       stage: "character_generate",
       projectId: task.project_id,
       userId: task.user_id!,
       payload: {},
-      idempotencyKey: `${task.project_id}:character_generate:auto`,
     });
   }
 
@@ -348,14 +347,15 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     payload: { generated },
   });
 
-  // Auto-chain: kick off storyboard once all character visuals are ready
-  enqueueTask({
+  // Auto-chain: kick off storyboard once character generation finishes (dedupe in-flight).
+  // We enqueue even if some portraits failed — visualization can proceed with partial assets;
+  // failed portraits will simply not be available as Element references in chunk videos.
+  enqueueStageOnce({
     type: "storyboard_generate",
     stage: "storyboard_generate",
     projectId: task.project_id,
     userId: task.user_id!,
     payload: {},
-    idempotencyKey: `${task.project_id}:storyboard_generate:auto`,
   });
 
   return { generated };
@@ -426,14 +426,13 @@ async function handleStoryboard(task: JobTaskRow): Promise<Record<string, unknow
   });
   setProjectStage(task.project_id, "storyboard_ready", 55);
 
-  // Auto-enqueue visualization stage so the next pipeline step runs.
-  enqueueTask({
+  // Auto-enqueue visualization stage so the next pipeline step runs (dedupe in-flight).
+  enqueueStageOnce({
     type: "visualization_generate",
     stage: "visualization_generate",
     projectId: task.project_id,
     userId: task.user_id,
     payload: {},
-    idempotencyKey: `${task.project_id}:visualization:${Date.now()}`,
   });
   return { scenes: scenes.length, chunks: totalChunks };
 }
@@ -530,6 +529,17 @@ async function handleVisualization(task: JobTaskRow): Promise<Record<string, unk
   }
 
   setProjectStage(task.project_id, "visualization_ready", 70);
+
+  // Auto-enqueue production pipeline so chunk videos start generating end-to-end
+  // (dedupe in-flight to prevent duplicate Kling video calls = wasted credits).
+  enqueueStageOnce({
+    type: "production_pipeline",
+    stage: "production_pipeline",
+    projectId: task.project_id,
+    userId: task.user_id,
+    payload: {},
+  });
+
   return { scenes: scenes.length };
 }
 
