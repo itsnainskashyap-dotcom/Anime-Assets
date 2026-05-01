@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import { Router, type IRouter } from "express";
 import db from "../db/index.js";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { generationLimiter } from "../middleware/rateLimit.js";
+import { singleUpload, VIDEO_MIME } from "../middleware/upload.js";
 import { enqueueTask } from "../services/queue.js";
 import { recordPlaygroundEvent } from "../services/playgroundEvents.js";
+import { saveBuffer } from "../providers/storageProvider.js";
 
 const router: IRouter = Router();
 
@@ -80,6 +83,46 @@ router.get("/:id/reference-video", requireAuth, (req, res) => {
     trimmedUrl: c.reference_video_trimmed_url,
   });
 });
+
+router.post(
+  "/:id/reference-video/upload",
+  requireAuth,
+  generationLimiter,
+  singleUpload({ allowedMime: VIDEO_MIME, maxBytes: 200 * 1024 * 1024, field: "file" }),
+  async (req, res) => {
+    const u = (req as AuthenticatedRequest).user!;
+    const c = loadChunkOwned(req.params.id as string, u.sub);
+    if (!c) {
+      res.status(404).json({ error: "Chunk not found" });
+      return;
+    }
+    const file = (req as unknown as { file?: Express.Multer.File }).file;
+    if (!file) {
+      res.status(400).json({ error: "Missing file field" });
+      return;
+    }
+    const buf = await fs.promises.readFile(file.path);
+    const saved = await saveBuffer(buf, {
+      userId: u.sub,
+      projectId: c.project_id,
+      assetType: "reference_video",
+      filename: file.filename,
+      contentType: file.mimetype,
+    });
+    await fs.promises.unlink(file.path).catch(() => undefined);
+    db.prepare(
+      "UPDATE video_chunks SET reference_video_url = ?, generation_mode='reference_video', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+    ).run(saved.url, c.id);
+    enqueueTask({
+      type: "reference_video_trim",
+      projectId: c.project_id,
+      userId: u.sub,
+      chunkId: c.id,
+      payload: { referenceVideoUrl: saved.url, sizeBytes: saved.sizeBytes, contentType: file.mimetype },
+    });
+    res.json({ ok: true, referenceVideoUrl: saved.url, sizeBytes: saved.sizeBytes });
+  },
+);
 
 router.post("/:id/reference-video", requireAuth, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;

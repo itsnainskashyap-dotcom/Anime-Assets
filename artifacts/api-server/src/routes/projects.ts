@@ -283,10 +283,17 @@ router.get("/:id/playground/events", requireAuth, (req, res) => {
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
   const cleanup = attachSseClient(p.id, res);
-  const recent = db
-    .prepare("SELECT id, event_type, agent, message, payload_json, created_at FROM playground_events WHERE project_id = ? ORDER BY created_at DESC LIMIT 50")
+  const events = db
+    .prepare(
+      "SELECT id, event_type, agent, message, payload_json, created_at FROM playground_events WHERE project_id = ? ORDER BY created_at DESC LIMIT 50",
+    )
     .all(p.id);
-  res.write(`event: history\ndata: ${JSON.stringify(recent)}\n\n`);
+  const agentLogs = db
+    .prepare(
+      "SELECT id, agent_name, level, message, metadata_json, created_at FROM agent_activity_logs WHERE project_id = ? ORDER BY created_at DESC LIMIT 50",
+    )
+    .all(p.id);
+  res.write(`event: history\ndata: ${JSON.stringify({ events, agentLogs })}\n\n`);
   req.on("close", cleanup);
 });
 

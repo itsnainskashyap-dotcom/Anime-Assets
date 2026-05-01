@@ -2,9 +2,31 @@ import crypto from "node:crypto";
 
 const ALGO = "aes-256-gcm";
 
+let cachedKey: Buffer | null = null;
 function getKey(): Buffer {
-  const k = process.env.APP_ENCRYPTION_KEY || "dev-encryption-key-change-me-please-32";
-  return crypto.createHash("sha256").update(k).digest();
+  if (cachedKey) return cachedKey;
+  const fromEnv = process.env.APP_ENCRYPTION_KEY;
+  if (fromEnv && fromEnv.length >= 32) {
+    cachedKey = crypto.createHash("sha256").update(fromEnv).digest();
+    return cachedKey;
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "APP_ENCRYPTION_KEY environment variable is required in production and must be at least 32 characters long. Refusing to encrypt provider secrets with a predictable key.",
+    );
+  }
+  if (fromEnv && fromEnv.length < 32) {
+    throw new Error("APP_ENCRYPTION_KEY must be at least 32 characters long.");
+  }
+  // Development only: derive an ephemeral random key per process. Existing
+  // ciphertexts written under previous runs will fail to decrypt — this is
+  // intentional and surfaces missing configuration loudly.
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[crypto] APP_ENCRYPTION_KEY not set — using an ephemeral development key. Stored provider secrets will be unrecoverable across restarts.",
+  );
+  cachedKey = crypto.randomBytes(32);
+  return cachedKey;
 }
 
 export function encryptSecret(plain: string): string {
