@@ -126,9 +126,15 @@ api-server artifact intentionally diverges from the workspace defaults:
   exporting/production_locked) gets a JSON snapshot of task + chunk
   counts written to `live_progress_snapshots`, trimmed to the last 200
   per project via SQLite `ROW_NUMBER() OVER (PARTITION BY project_id)`.
-- **Web preview port**: `Start application` workflow runs vite on
-  `PORT=18134` to match the artifact's `localPort` so the workspace
-  preview iframe resolves correctly.
+- **Workflows are artifact-managed**: both servers run via the
+  artifact-defined workflows `artifacts/api-server: API Server` (port
+  8080) and `artifacts/animestudioai-web: web` (port 18134). Do NOT
+  add manual `[[workflows.workflow]]` blocks in `.replit` for these
+  services — they will collide on the same ports and one set will
+  appear FAILED. The api-server's `[services.development].run` uses
+  `sh -c 'PUBLIC_BASE_URL=https://${REPLIT_DEV_DOMAIN} pnpm ...'` so
+  the public URL is injected for Magnific asset fetches; the web
+  artifact's `[services.env]` supplies `PORT=18134` and `BASE_PATH=/`.
 - **Fully autonomous pipeline** (`jobs/handlers.ts`): when the user
   submits the create-project wizard, `CreateProject.handleSubmit` POSTs
   to `/story-bible/generate` once. From there, every stage handler
