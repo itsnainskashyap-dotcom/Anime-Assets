@@ -238,6 +238,18 @@ JSON SCHEMA
   });
   setProjectStage(task.project_id, "story_bible_ready", 15);
 
+  // Auto-chain: immediately kick off character generation
+  if ((data.characters?.length || 0) > 0) {
+    enqueueTask({
+      type: "character_generate",
+      stage: "character_generate",
+      projectId: task.project_id,
+      userId: task.user_id!,
+      payload: {},
+      idempotencyKey: `${task.project_id}:character_generate:auto`,
+    });
+  }
+
   return { bibleId, characters: data.characters?.length || 0, scenes: data.scenes?.length || 0 };
 }
 
@@ -334,6 +346,16 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     agent: "character_director",
     message: `Generated visuals for ${generated.length} characters.`,
     payload: { generated },
+  });
+
+  // Auto-chain: kick off storyboard once all character visuals are ready
+  enqueueTask({
+    type: "storyboard_generate",
+    stage: "storyboard_generate",
+    projectId: task.project_id,
+    userId: task.user_id!,
+    payload: {},
+    idempotencyKey: `${task.project_id}:storyboard_generate:auto`,
   });
 
   return { generated };

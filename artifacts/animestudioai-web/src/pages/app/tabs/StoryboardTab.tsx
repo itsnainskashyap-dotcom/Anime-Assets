@@ -1,65 +1,90 @@
-import { motion } from "framer-motion";
-import { Play, CheckCircle2, RefreshCcw, Loader2, Maximize2, Sparkles } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Loader2, Sparkles, LayoutTemplate, Clock, Film, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Project } from "@/types/api";
 
-interface StoryboardScene {
+interface Scene {
   id: string;
-  index?: number;
-  text: string;
+  scene_number: number;
+  act_number?: number;
+  title?: string;
+  description?: string;
+  shot_type?: string;
+  duration_seconds?: number;
+  emotion?: string;
   status?: string;
-  durationSec?: number;
-  imageUrl?: string;
+  start_frame_url?: string | null;
+  end_frame_url?: string | null;
 }
 
-interface StoryboardResponse {
-  scenes: StoryboardScene[];
-}
+const EMOTION_COLORS: Record<string, string> = {
+  intense: "text-red-400 bg-red-500/10 border-red-500/20",
+  calm: "text-sky-400 bg-sky-500/10 border-sky-500/20",
+  hopeful: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+  dramatic: "text-purple-400 bg-purple-500/10 border-purple-500/20",
+  melancholic: "text-blue-400 bg-blue-500/10 border-blue-500/20",
+  cinematic: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+};
 
 export default function StoryboardTab({ project }: { project: Project }) {
   const { api } = useAuth();
-  const queryClient = useQueryClient();
 
-  const { data, isLoading, error } = useQuery<StoryboardResponse | null>({
-    queryKey: ["projects", project.id, "storyboard"],
+  const { data: scenes = [], isLoading, error } = useQuery<Scene[]>({
+    queryKey: ["projects", project.id, "scenes"],
     queryFn: async () => {
-      try {
-        const res = await api(`/api/projects/${project.id}/storyboard`);
-        return (await res.json()) as StoryboardResponse;
-      } catch (err) {
-        if ((err as Error).message?.toLowerCase().includes("not found")) {
-          return null;
-        }
-        throw err;
-      }
+      const res = await api(`/api/projects/${project.id}/scenes`);
+      return res.json() as Promise<Scene[]>;
+    },
+    refetchInterval: (query) => {
+      const sc = query.state.data as Scene[] | undefined;
+      if (!sc || sc.length === 0) return 6000;
+      const anyNoBoard = sc.some(s => !s.start_frame_url);
+      return anyNoBoard ? 8000 : false;
     },
   });
 
   const generateStoryboard = useMutation({
     mutationFn: () => api(`/api/projects/${project.id}/storyboard/generate`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", project.id, "storyboard"] }),
   });
 
+  const generateViz = useMutation({
+    mutationFn: () => api(`/api/projects/${project.id}/visualization/generate`, { method: "POST" }),
+  });
+
+  const boardCount = scenes.filter(s => s.start_frame_url).length;
+  const totalScenes = scenes.length;
+  const actGroups = scenes.reduce<Record<number, Scene[]>>((acc, s) => {
+    const act = s.act_number ?? 1;
+    if (!acc[act]) acc[act] = [];
+    acc[act].push(s);
+    return acc;
+  }, {});
+
   if (isLoading) {
-    return <div className="p-8 text-muted-foreground">Loading…</div>;
+    return (
+      <div className="h-full flex items-center justify-center text-muted-foreground gap-2">
+        <Loader2 className="w-5 h-5 animate-spin" /> Loading scenes…
+      </div>
+    );
   }
+
   if (error) {
     return <div className="p-8 text-destructive">Failed to load: {(error as Error).message}</div>;
   }
 
-  const scenes: StoryboardScene[] = data?.scenes ?? [];
-
-  if (scenes.length === 0) {
+  if (totalScenes === 0) {
     return (
-      <div className="p-8 flex flex-col items-start gap-4 text-muted-foreground">
-        <p>Storyboard not generated yet.</p>
-        <Button
-          className="gap-2"
-          onClick={() => generateStoryboard.mutate()}
-          disabled={generateStoryboard.isPending}
-        >
+      <div className="h-full flex flex-col items-center justify-center gap-4 text-center p-8">
+        <div className="w-16 h-16 rounded-full bg-card border border-border/50 flex items-center justify-center">
+          <LayoutTemplate className="w-8 h-8 text-muted-foreground/30" />
+        </div>
+        <div>
+          <p className="font-semibold mb-1">Scenes not yet generated</p>
+          <p className="text-sm text-muted-foreground">Scenes are created automatically from the Story Bible.<br/>Generate your bible first.</p>
+        </div>
+        <Button className="gap-2" onClick={() => generateStoryboard.mutate()} disabled={generateStoryboard.isPending}>
           {generateStoryboard.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           Generate Storyboard
         </Button>
@@ -68,99 +93,109 @@ export default function StoryboardTab({ project }: { project: Project }) {
   }
 
   return (
-    <div className="h-full flex gap-1">
-      <div className="w-[300px] border-r border-border/50 bg-card/30 p-4 overflow-auto scrollbar-none flex flex-col gap-4">
-        <div className="flex justify-between items-center">
-          <h3 className="font-bold">Episode Timeline</h3>
-        </div>
+    <div className="h-full overflow-auto scrollbar-none">
+      <div className="max-w-5xl mx-auto p-8 space-y-8">
 
-        <div className="relative border-l-2 border-border/50 ml-3 pl-4 space-y-6">
-          {scenes.map((s, i) => (
-            <div key={s.id} className="relative">
-              <div className={`absolute -left-[23px] top-1 w-3 h-3 rounded-full border-2 bg-background ${s.status === 'approved' ? 'border-primary' : 'border-border'}`} />
-              <div className="text-sm font-semibold text-muted-foreground mb-1">Scene {s.index ?? i + 1}</div>
-              <p className="text-sm leading-relaxed">{s.text}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-auto pt-4">
-          <Button
-            className="w-full gap-2"
-            onClick={() => generateStoryboard.mutate()}
-            disabled={generateStoryboard.isPending}
-          >
-            {generateStoryboard.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
-            Regenerate Missing
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex-1 bg-background/30 p-8 overflow-auto scrollbar-none">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex justify-between items-end mb-8">
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight">Storyboard Review</h2>
-              <p className="text-muted-foreground">Approve camera angles and pacing before final production.</p>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" className="gap-2">
-                <Play className="w-4 h-4" /> Play Animatics
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <LayoutTemplate className="w-6 h-6 text-primary" />
+              Storyboard
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              {totalScenes} scenes
+              {boardCount > 0 && ` • ${boardCount}/${totalScenes} visualization boards ready`}
+            </p>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            {boardCount < totalScenes && boardCount === 0 && (
+              <Button size="sm" onClick={() => generateViz.mutate()} disabled={generateViz.isPending} variant="outline" className="gap-2">
+                {generateViz.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4 text-primary" />}
+                Generate Boards
               </Button>
-              <Button className="gap-2">
-                <CheckCircle2 className="w-4 h-4" /> Approve All
-              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Progress bar for visualization */}
+        {boardCount > 0 && boardCount < totalScenes && (
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-amber-500/20 bg-amber-500/5">
+            <Loader2 className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
+            <div className="flex-1">
+              <div className="flex justify-between text-sm mb-1.5">
+                <span className="text-amber-300">Generating scene boards…</span>
+                <span className="text-muted-foreground">{boardCount}/{totalScenes}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-amber-500/20 overflow-hidden">
+                <div className="h-full bg-amber-400 transition-all duration-500" style={{ width: `${(boardCount / totalScenes) * 100}%` }} />
+              </div>
             </div>
           </div>
+        )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {scenes.map((s, i) => (
-              <motion.div
-                key={s.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 }}
-                className="group rounded-xl border border-border/50 bg-card overflow-hidden"
-              >
-                <div className="aspect-video bg-muted relative">
-                  {s.imageUrl ? (
-                    <img src={s.imageUrl} alt={`Board ${i + 1}`} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-muted-foreground/30 font-bold tracking-wider">BOARD {i + 1}</span>
+        {/* Act groups */}
+        {Object.entries(actGroups).map(([act, actScenes]) => (
+          <div key={act} className="space-y-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <div className="h-px flex-1 bg-border/50" />
+              Act {act}
+              <div className="h-px flex-1 bg-border/50" />
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {actScenes.map((scene) => {
+                const emotionClass = EMOTION_COLORS[scene.emotion?.toLowerCase() ?? ""] ?? EMOTION_COLORS.cinematic;
+                return (
+                  <div key={scene.id} className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
+                    {/* Board image */}
+                    <div className="aspect-video bg-muted/30 relative flex items-center justify-center">
+                      {scene.start_frame_url ? (
+                        <img src={scene.start_frame_url} alt={scene.title ?? `Scene ${scene.scene_number}`} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="flex flex-col items-center gap-1.5 text-muted-foreground/30">
+                          <Film className="w-8 h-8" />
+                          <span className="text-xs uppercase tracking-wider">Board pending</span>
+                        </div>
+                      )}
+                      <div className="absolute top-2 left-2">
+                        <span className="text-xs font-bold bg-background/60 backdrop-blur px-2 py-0.5 rounded text-muted-foreground">
+                          S{scene.scene_number}
+                        </span>
+                      </div>
+                      {scene.status === "storyboarded" && (
+                        <div className="absolute top-2 right-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 drop-shadow" />
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <div className="absolute top-2 right-2 flex gap-1">
-                    <Button size="icon" variant="secondary" className="w-8 h-8 rounded-full bg-background/50 backdrop-blur opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Maximize2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                  {s.status === 'approved' && (
-                    <div className="absolute bottom-2 right-2">
-                      <div className="bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded text-xs font-medium backdrop-blur flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> Approved
+
+                    {/* Info */}
+                    <div className="p-4 space-y-2">
+                      {scene.title && <p className="font-semibold text-sm">{scene.title}</p>}
+                      {scene.description && (
+                        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">{scene.description}</p>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap pt-1">
+                        {scene.duration_seconds && (
+                          <Badge variant="secondary" className="gap-1 text-xs">
+                            <Clock className="w-3 h-3" /> {scene.duration_seconds}s
+                          </Badge>
+                        )}
+                        {scene.shot_type && (
+                          <Badge variant="outline" className="text-xs border-border/50 capitalize">{scene.shot_type}</Badge>
+                        )}
+                        {scene.emotion && (
+                          <Badge variant="outline" className={`text-xs border ${emotionClass} capitalize`}>{scene.emotion}</Badge>
+                        )}
                       </div>
                     </div>
-                  )}
-                </div>
-                <div className="p-4 border-t border-border/50">
-                  <div className="text-xs font-bold text-muted-foreground mb-2 flex items-center justify-between">
-                    <span>SCENE {s.index ?? i + 1}</span>
-                    {s.durationSec ? <span>{s.durationSec}s</span> : null}
                   </div>
-                  <p className="text-sm line-clamp-3 leading-relaxed text-foreground/80">{s.text}</p>
-
-                  {s.status !== 'approved' && (
-                    <div className="mt-4 flex gap-2">
-                      <Button variant="outline" size="sm" className="flex-1">Regenerate</Button>
-                      <Button size="sm" className="flex-1">Approve</Button>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            ))}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        ))}
       </div>
     </div>
   );

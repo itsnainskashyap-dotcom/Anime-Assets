@@ -31,7 +31,7 @@ const VOICES = [
 
 export default function CreateProject() {
   const [, setLocation] = useLocation();
-  const { user } = useAuth();
+  const { user, api } = useAuth();
   const createProject = useCreateProject();
   
   const [step, setStep] = useState(1);
@@ -69,6 +69,8 @@ export default function CreateProject() {
   const handleSubmit = async () => {
     try {
       const res = await createProject.mutateAsync(formData);
+      // Auto-kick the full autonomous pipeline: story → chars → storyboard → visualization
+      await api(`/api/projects/${res.id}/story-bible/generate`, { method: "POST" }).catch(() => {});
       setLocation(`/app/projects/${res.id}/story`);
     } catch (err) {
       console.error(err);
