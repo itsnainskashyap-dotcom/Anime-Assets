@@ -20,6 +20,25 @@ export interface ChunkCtx {
   description?: string | null;
 }
 
+/**
+ * Identity-lock element entry consumed by `compileChunkPrompt`. The compiler
+ * emits `@Element1`, `@Element2`, ... in the prompt in the SAME order this
+ * array is provided, so the caller is responsible for keeping the matching
+ * `elements[]` API payload in sync.
+ */
+export interface ElementCharacter {
+  characterName: string;
+  shortDescription?: string;
+}
+
+/**
+ * Style/appearance reference entry. Emitted as `@Image1`, `@Image2`, ...
+ * in the order provided.
+ */
+export interface ImageRef {
+  label: string;
+}
+
 export interface CompilerInput {
   projectId: string;
   scene: SceneCtx;
@@ -28,6 +47,10 @@ export interface CompilerInput {
   prevChunkVideoUrl?: string;
   prevChunkEndFrameUrl?: string;
   animeStyle?: string;
+  /** Characters to lock via Kling `elements[]` (positional). */
+  elementCharacters?: ElementCharacter[];
+  /** Style/scene refs to lock via Kling `image_urls[]` (positional). */
+  imageRefs?: ImageRef[];
 }
 
 export interface CompilerOutput {
@@ -36,6 +59,8 @@ export interface CompilerOutput {
   mode: ChunkGenerationMode;
   characterLockBlock: string;
   environmentLockBlock: string;
+  elementBlock: string;
+  imageRefBlock: string;
   aspectRatio: string;
   durationSeconds: number;
 }
@@ -106,9 +131,37 @@ function clipToBudget(prompt: string): string {
   return prompt.slice(0, max - 3).trimEnd() + "...";
 }
 
+function buildElementBlock(elements: ElementCharacter[] | undefined): string {
+  if (!elements || elements.length === 0) return "";
+  const lines = elements.map((e, i) => {
+    const tag = `@Element${i + 1}`;
+    const desc = e.shortDescription ? ` — ${e.shortDescription}` : "";
+    return `- ${tag} = ${e.characterName}${desc}`;
+  });
+  return [
+    "ELEMENT BINDINGS (identity-locked references):",
+    ...lines,
+    `Use these tokens in the action. Example: "${elements
+      .map((_, i) => `@Element${i + 1}`)
+      .join(" and ")} interact naturally and stay on-model."`,
+  ].join("\n");
+}
+
+function buildImageRefBlock(refs: ImageRef[] | undefined): string {
+  if (!refs || refs.length === 0) return "";
+  const lines = refs.map((r, i) => `- @Image${i + 1} = ${r.label}`);
+  return [
+    "STYLE & SCENE REFERENCES:",
+    ...lines,
+    "Match the framing, color palette and rendering style of these references.",
+  ].join("\n");
+}
+
 export function compileChunkPrompt(input: CompilerInput): CompilerOutput {
   const characterLockBlock = loadCharacterLocks(input.projectId);
   const environmentLockBlock = loadEnvironmentLocks(input.projectId);
+  const elementBlock = buildElementBlock(input.elementCharacters);
+  const imageRefBlock = buildImageRefBlock(input.imageRefs);
   const animeStyle = input.animeStyle || "modern cel-shaded anime";
   const sceneSummary = (input.scene.description || input.scene.title || "").trim();
   const shot = input.scene.shot_type || "medium";
@@ -124,6 +177,8 @@ export function compileChunkPrompt(input: CompilerInput): CompilerOutput {
     `SCENE ${input.scene.scene_number} — CHUNK ${input.chunk.chunk_number}`,
     `Action: ${sceneSummary}`,
     continuityLine,
+    elementBlock,
+    imageRefBlock,
     characterLockBlock,
     environmentLockBlock,
     "Animation: smooth 24fps, sharp linework, vibrant colors, cinematic lighting, dynamic camera, no text or watermark.",
@@ -139,7 +194,12 @@ export function compileChunkPrompt(input: CompilerInput): CompilerOutput {
     mode: input.mode,
     characterLockBlock,
     environmentLockBlock,
+    elementBlock,
+    imageRefBlock,
     aspectRatio: "16:9",
-    durationSeconds: Math.min(input.chunk.duration_seconds || 10, MAGNIFIC_CAPABILITIES.outputDurationSeconds),
+    durationSeconds: Math.min(
+      input.chunk.duration_seconds || 10,
+      MAGNIFIC_CAPABILITIES.outputDurationMaxSeconds,
+    ),
   };
 }

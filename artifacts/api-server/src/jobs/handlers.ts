@@ -598,8 +598,9 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
       reference_video_trimmed_url: string | null;
       start_frame_image_url: string | null;
       end_frame_image_url: string | null;
+      seed_frame_image_url: string | null;
     }>(
-      "SELECT id, project_id, scene_id, chunk_number, duration_seconds, prompt_text, generation_mode, reference_video_url, reference_video_trimmed_url, start_frame_image_url, end_frame_image_url FROM video_chunks WHERE id = ?",
+      "SELECT id, project_id, scene_id, chunk_number, duration_seconds, prompt_text, generation_mode, reference_video_url, reference_video_trimmed_url, start_frame_image_url, end_frame_image_url, seed_frame_image_url FROM video_chunks WHERE id = ?",
     )
     .get(chunkId);
   if (!chunk) throw new Error("chunk not found");
@@ -651,6 +652,93 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
   if (chunk.chunk_number > 1 && prevChunkVideoUrl) mode = "reference_video";
 
   const project = projectRow(task.project_id);
+
+  // ── Resolve identity-lock characters (Kling `elements[]`) ─────────────
+  // Kling Omni Pro caps `image_urls.length + elements.length` at 4. We reserve
+  // up to 1 slot for scene_board (image_urls), leaving 3 for character locks.
+  // Characters appear in deterministic order: 'lead' role first, then by name.
+  const charLineup = db
+    .prepare<
+      [string],
+      {
+        id: string;
+        name: string;
+        role: string | null;
+        portrait_url: string | null;
+        model_sheet_front_url: string | null;
+        model_sheet_three_quarter_url: string | null;
+        model_sheet_back_url: string | null;
+      }
+    >(
+      `SELECT id, name, role, portrait_url, model_sheet_front_url, model_sheet_three_quarter_url, model_sheet_back_url
+       FROM characters WHERE project_id = ?
+       ORDER BY CASE WHEN LOWER(COALESCE(role,'')) IN ('lead','protagonist','main') THEN 0 ELSE 1 END, name ASC`,
+    )
+    .all(task.project_id);
+
+  const elementChars: import("../services/promptCompiler.js").ElementCharacter[] = [];
+  const elementsApi: import("../providers/videoProvider.js").VideoElement[] = [];
+  for (const c of charLineup) {
+    const refs = [
+      toAbsolute(c.model_sheet_front_url),
+      toAbsolute(c.model_sheet_three_quarter_url),
+      toAbsolute(c.model_sheet_back_url),
+      toAbsolute(c.portrait_url),
+    ].filter((u): u is string => !!u);
+    const frontal = toAbsolute(c.model_sheet_front_url) || toAbsolute(c.portrait_url);
+    if (refs.length === 0 && !frontal) continue;
+    elementsApi.push({
+      reference_image_urls: refs.length > 0 ? refs : (frontal ? [frontal] : []),
+      ...(frontal ? { frontal_image_url: frontal } : {}),
+    });
+    elementChars.push({
+      characterName: c.name,
+      shortDescription: c.role || undefined,
+    });
+    if (elementsApi.length >= 3) break;
+  }
+
+  // ── Resolve style/scene image refs (Kling `image_urls[]`) ─────────────
+  const sceneViz = chunk.scene_id
+    ? db
+        .prepare<
+          [string],
+          { scene_board_url: string | null; element_urls: string | null }
+        >("SELECT scene_board_url, element_urls FROM scene_visualizations WHERE scene_id = ?")
+        .get(chunk.scene_id)
+    : undefined;
+
+  const elementUrls: string[] = (() => {
+    if (!sceneViz?.element_urls) return [];
+    try {
+      const parsed = JSON.parse(sceneViz.element_urls);
+      return Array.isArray(parsed)
+        ? parsed.filter((u): u is string => typeof u === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const imageRefsApi: string[] = [];
+  const imageRefLabels: import("../services/promptCompiler.js").ImageRef[] = [];
+  const pushImageRef = (url: string | undefined, label: string) => {
+    if (!url) return;
+    if (imageRefsApi.includes(url)) return;
+    imageRefsApi.push(url);
+    imageRefLabels.push({ label });
+  };
+  pushImageRef(toAbsolute(sceneViz?.scene_board_url || null), "scene composition board");
+  pushImageRef(toAbsolute(elementUrls[0]), "scene element 1");
+  pushImageRef(toAbsolute(elementUrls[1]), "scene element 2");
+  pushImageRef(toAbsolute(chunk.seed_frame_image_url), "continuity seed frame");
+
+  // Trim image_urls so total refs (image_urls + elements) <= 4.
+  const totalRefBudget = 4;
+  const remainingForImages = Math.max(0, totalRefBudget - elementsApi.length);
+  const imageUrlsTrimmed = imageRefsApi.slice(0, remainingForImages);
+  const imageRefLabelsTrimmed = imageRefLabels.slice(0, remainingForImages);
+
   const compiled = scene
     ? compileChunkPrompt({
         projectId: task.project_id,
@@ -668,6 +756,8 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
         prevChunkVideoUrl,
         prevChunkEndFrameUrl,
         animeStyle: project?.genre || "modern anime",
+        elementCharacters: elementChars.slice(0, elementsApi.length),
+        imageRefs: imageRefLabelsTrimmed,
       })
     : null;
 
@@ -757,12 +847,13 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
 
     const result = await generateVideo({
       prompt: finalPrompt,
-      negativePrompt: negative,
       durationSeconds: Math.min(chunk.duration_seconds, 10),
       aspectRatio: "16:9",
       startImageUrl: toAbsolute(chunk.start_frame_image_url),
       endImageUrl: mode === "standard" ? toAbsolute(chunk.end_frame_image_url) : undefined,
       referenceVideoUrl,
+      imageUrls: imageUrlsTrimmed,
+      elements: elementsApi,
       userId: task.user_id,
       projectId: task.project_id,
       chunkId,

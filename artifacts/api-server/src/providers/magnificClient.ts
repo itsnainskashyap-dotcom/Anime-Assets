@@ -1,18 +1,19 @@
 /**
- * Lightweight HTTP client for the Magnific (Freepik) AI APIs.
+ * Lightweight HTTP client for the Magnific AI API.
  *
- * The exact base URL is configurable via MAGNIFIC_API_BASE_URL — defaults to
- * Freepik's public AI API (which serves the Kling family of models referenced
- * by `magnificCapabilities.ts`). The auth header name is also configurable via
- * MAGNIFIC_AUTH_HEADER (defaults to `x-freepik-api-key`).
+ * Defaults match the official documentation at https://docs.magnific.com:
+ *   - base URL: https://api.magnific.com
+ *   - auth header: x-magnific-api-key
+ * Both are overridable via MAGNIFIC_API_BASE_URL / MAGNIFIC_AUTH_HEADER for
+ * deployments that proxy through Freepik or another mirror.
  */
 import { logger } from "../lib/logger.js";
 import { getActiveKey, notConfiguredError, withFailover } from "./registry.js";
 import db from "../db/index.js";
 import { v4 as uuid } from "uuid";
 
-const BASE_URL = process.env.MAGNIFIC_API_BASE_URL || "https://api.freepik.com";
-const AUTH_HEADER = process.env.MAGNIFIC_AUTH_HEADER || "x-freepik-api-key";
+const BASE_URL = process.env.MAGNIFIC_API_BASE_URL || "https://api.magnific.com";
+const AUTH_HEADER = process.env.MAGNIFIC_AUTH_HEADER || "x-magnific-api-key";
 const TIMEOUT_MS = Number(process.env.MAGNIFIC_TIMEOUT_MS || "60000");
 
 export class MagnificError extends Error {

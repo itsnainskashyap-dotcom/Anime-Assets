@@ -28,8 +28,10 @@ const ALL_CAPABILITIES = [
   "image_to_video",
   "reference_video_token",
   "prompt_budget",
-  "native_audio",
   "multi_shot",
+  "elements",
+  "generate_audio",
+  "start_end_image_pair",
 ] as const;
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ value: T | null; durationMs: number; error?: string }> {
@@ -139,21 +141,47 @@ function probePromptBudget(): CapabilityProbeResult {
   };
 }
 
-function probeNativeAudio(): CapabilityProbeResult {
-  return {
-    capability: "native_audio",
-    passed: !!MAGNIFIC_CAPABILITIES.nativeAudio,
-    durationMs: 0,
-    details: { nativeAudio: MAGNIFIC_CAPABILITIES.nativeAudio },
-  };
-}
-
 function probeMultiShot(): CapabilityProbeResult {
   return {
     capability: "multi_shot",
     passed: !!MAGNIFIC_CAPABILITIES.supportsMultiShot,
     durationMs: 0,
-    details: { maxMultiShots: MAGNIFIC_CAPABILITIES.maxMultiShots },
+    details: {
+      maxMultiShots: MAGNIFIC_CAPABILITIES.maxMultiShots,
+      multiShotMaxTotalSeconds: MAGNIFIC_CAPABILITIES.multiShotMaxTotalSeconds,
+      multiShotShotTypes: MAGNIFIC_CAPABILITIES.multiShotShotTypes,
+    },
+  };
+}
+
+function probeElements(): CapabilityProbeResult {
+  return {
+    capability: "elements",
+    passed: !!MAGNIFIC_CAPABILITIES.supportsElements,
+    durationMs: 0,
+    details: { maxImageAndElementRefs: MAGNIFIC_CAPABILITIES.maxImageAndElementRefs },
+  };
+}
+
+function probeGenerateAudio(): CapabilityProbeResult {
+  return {
+    capability: "generate_audio",
+    passed: !!MAGNIFIC_CAPABILITIES.supportsGenerateAudio,
+    durationMs: 0,
+    details: { supportsGenerateAudio: MAGNIFIC_CAPABILITIES.supportsGenerateAudio },
+  };
+}
+
+function probeStartEndImagePair(): CapabilityProbeResult {
+  return {
+    capability: "start_end_image_pair",
+    passed: !!MAGNIFIC_CAPABILITIES.supportsStartEndImagePair,
+    durationMs: 0,
+    details: {
+      supportsStartEndImagePair: MAGNIFIC_CAPABILITIES.supportsStartEndImagePair,
+      supportsEndImageWithMultiPrompt: MAGNIFIC_CAPABILITIES.supportsEndImageWithMultiPrompt,
+      supportsEndImageWithReferenceVideo: MAGNIFIC_CAPABILITIES.supportsEndImageWithReferenceVideo,
+    },
   };
 }
 
@@ -165,8 +193,10 @@ const PROBES: Record<string, () => Promise<CapabilityProbeResult> | CapabilityPr
   image_to_video: probeImageToVideo,
   reference_video_token: probeReferenceVideo,
   prompt_budget: probePromptBudget,
-  native_audio: probeNativeAudio,
   multi_shot: probeMultiShot,
+  elements: probeElements,
+  generate_audio: probeGenerateAudio,
+  start_end_image_pair: probeStartEndImagePair,
 };
 
 export async function runCapabilityProbe(opts: RunOpts = {}): Promise<{

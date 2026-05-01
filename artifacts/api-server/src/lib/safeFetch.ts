@@ -2,12 +2,18 @@ import dns from "node:dns/promises";
 import net from "node:net";
 
 const DEFAULT_ALLOW_HOSTS = [
-  "api.freepik.com",
+  // Magnific (primary)
+  "api.magnific.com",
+  "magnific.com",
+  "cdn.magnific.com",
   "magnific.ai",
   "api.magnific.ai",
+  // Freepik (legacy / mirror — kept for env-overridden deployments)
+  "api.freepik.com",
   "cdn.freepik.com",
   "ai-static.freepik.com",
   "freepik-asset.s3.amazonaws.com",
+  // CDNs the providers commonly redirect to
   "klingaiapi.com",
   "imagedelivery.net",
   "replicate.delivery",
