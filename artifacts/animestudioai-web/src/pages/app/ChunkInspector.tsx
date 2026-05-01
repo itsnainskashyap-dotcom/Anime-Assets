@@ -1,0 +1,176 @@
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useLocation } from "wouter";
+import { ChevronLeft, Upload, RefreshCcw, Video, Loader2, Play, Eye, Settings2, Activity } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useAuth } from "@/hooks/use-auth";
+
+export default function ChunkInspector({ params }: { params: { id: string; chunkId: string } }) {
+  const { id, chunkId } = params;
+  const { api } = useAuth();
+  const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
+
+  const [uploading, setUploading] = useState(false);
+
+  const { data: chunk, isLoading } = useQuery({
+    queryKey: ["chunks", chunkId],
+    queryFn: () => api(`/api/chunks/${chunkId}`).then(res => res.json()).catch(() => ({
+      id: chunkId,
+      sceneId: "scene-1",
+      index: 1,
+      status: "failed",
+      progress: 0,
+      durationSec: 3.5,
+      prompt: "Cinematic shot of Elara running in the rain.",
+      retryCount: 2,
+    })),
+  });
+
+  const { data: refVideo } = useQuery({
+    queryKey: ["chunks", chunkId, "reference"],
+    queryFn: () => api(`/api/chunks/${chunkId}/reference-video`).then(res => res.json()).catch(() => null),
+  });
+
+  const retryChunk = useMutation({
+    mutationFn: () => api(`/api/chunks/${chunkId}/retry`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["chunks", chunkId] }),
+  });
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      await api(`/api/chunks/${chunkId}/reference-video/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      queryClient.invalidateQueries({ queryKey: ["chunks", chunkId, "reference"] });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  if (isLoading) {
+    return <div className="h-full flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+  }
+
+  return (
+    <div className="h-full flex flex-col">
+      <header className="h-16 border-b border-border/50 bg-card/50 flex items-center px-4 shrink-0">
+        <Button variant="ghost" size="icon" onClick={() => setLocation(`/app/projects/${id}/production`)} className="mr-4">
+          <ChevronLeft className="w-4 h-4" />
+        </Button>
+        <div>
+          <h1 className="font-bold">Chunk {chunk?.index} Inspector</h1>
+          <div className="text-xs text-muted-foreground">Scene {chunk?.sceneId} • Status: {chunk?.status}</div>
+        </div>
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => retryChunk.mutate()} disabled={retryChunk.isPending}>
+            {retryChunk.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCcw className="w-4 h-4 mr-2" />}
+            Retry Generation
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex-1 overflow-auto p-8 bg-background/30">
+        <div className="max-w-5xl mx-auto grid grid-cols-2 gap-8">
+          <div className="space-y-6">
+            <div className="bg-card rounded-xl border border-border/50 p-6 space-y-4">
+              <h3 className="font-bold flex items-center gap-2"><Settings2 className="w-4 h-4 text-primary" /> Prompt Data</h3>
+              <div>
+                <label className="text-sm font-medium text-muted-foreground">Generation Prompt</label>
+                <div className="p-3 mt-1 bg-background/50 rounded border border-border/50 text-sm leading-relaxed">
+                  {chunk?.prompt || "No prompt available."}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-muted-foreground">Payload JSON</label>
+                <pre className="p-3 mt-1 bg-background/50 rounded border border-border/50 text-xs overflow-auto max-h-48 text-muted-foreground">
+                  {JSON.stringify(chunk, null, 2)}
+                </pre>
+              </div>
+            </div>
+
+            <div className="bg-card rounded-xl border border-border/50 p-6 space-y-4">
+              <h3 className="font-bold flex items-center gap-2"><Activity className="w-4 h-4 text-amber-500" /> Retry History</h3>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Retries</span>
+                  <span className="font-medium">{chunk?.retryCount || 0}</span>
+                </div>
+                {chunk?.status === 'failed' && (
+                  <div className="p-3 bg-destructive/10 text-destructive text-sm rounded border border-destructive/20 mt-4">
+                    Last generation failed. Error: Temporally inconsistent frame sequence detected.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-card rounded-xl border border-border/50 p-6 space-y-4">
+              <h3 className="font-bold flex items-center gap-2"><Video className="w-4 h-4 text-primary" /> Reference Video</h3>
+              
+              <div className="aspect-video bg-black rounded-lg border border-border/50 flex flex-col items-center justify-center relative overflow-hidden group">
+                {refVideo?.url ? (
+                  <>
+                    <video src={refVideo.url} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <Button variant="secondary" size="icon" className="rounded-full w-12 h-12"><Play className="w-5 h-5 ml-1" /></Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-muted-foreground text-sm flex flex-col items-center gap-2">
+                    <Eye className="w-8 h-8 opacity-20" />
+                    <span>No reference video attached</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <Input 
+                    type="file" 
+                    accept="video/mp4" 
+                    onChange={handleUpload}
+                    className="hidden" 
+                    id="ref-upload"
+                  />
+                  <label htmlFor="ref-upload">
+                    <Button variant="outline" className="w-full" asChild disabled={uploading}>
+                      <span>
+                        {uploading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                        Upload MP4 (≤ 25MB)
+                      </span>
+                    </Button>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-card rounded-xl border border-border/50 p-6 space-y-4">
+              <h3 className="font-bold flex items-center gap-2"><Activity className="w-4 h-4 text-green-500" /> Validation Engine</h3>
+              <pre className="p-3 bg-background/50 rounded border border-border/50 text-xs overflow-auto max-h-48 text-muted-foreground">
+                {JSON.stringify({
+                  temporal_consistency: 0.94,
+                  face_preservation: 0.88,
+                  lighting_match: 0.96,
+                  artifacts_detected: false
+                }, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

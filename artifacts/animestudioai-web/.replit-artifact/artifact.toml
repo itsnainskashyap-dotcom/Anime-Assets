@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "AnimeStudioAI"
+version = "1.0.0"
+id = "artifacts/animestudioai-web"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18134
+
+[services.development]
+run = "pnpm --filter @workspace/animestudioai-web run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/animestudioai-web", "run", "build" ]
+publicDir = "artifacts/animestudioai-web/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18134"
+BASE_PATH = "/"
