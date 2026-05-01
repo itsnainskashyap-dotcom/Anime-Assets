@@ -1,4 +1,4 @@
-import { useLocation } from "wouter";
+import { useLocation, useParams } from "wouter";
 import { useProject } from "@/hooks/use-projects";
 import { Link } from "wouter";
 import { 
@@ -30,8 +30,10 @@ const TABS = [
   { id: "export", label: "Export", icon: Download },
 ];
 
-export default function ProjectDetail({ params }: { params: { id: string; tab?: string } }) {
-  const { id, tab = "story" } = params;
+export default function ProjectDetail() {
+  const params = useParams<{ id: string; tab?: string }>();
+  const id = params.id ?? "";
+  const tab = params.tab ?? "story";
   const { data: project, isLoading } = useProject(id);
   const [, setLocation] = useLocation();
 

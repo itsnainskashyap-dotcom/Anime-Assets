@@ -8,9 +8,10 @@ const DEFAULT_ALLOW_HOSTS = [
   "cdn.magnific.com",
   "magnific.ai",
   "api.magnific.ai",
-  // Freepik (legacy / mirror — kept for env-overridden deployments)
+  // Freepik / Magnific CDN (Magnific delivers results via cdn-magnific.freepik.com)
   "api.freepik.com",
   "cdn.freepik.com",
+  "cdn-magnific.freepik.com",
   "ai-static.freepik.com",
   "freepik-asset.s3.amazonaws.com",
   // CDNs the providers commonly redirect to

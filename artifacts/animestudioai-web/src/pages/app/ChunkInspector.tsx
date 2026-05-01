@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useParams } from "wouter";
 import { ChevronLeft, Upload, RefreshCcw, Video, Loader2, Play, Eye, Settings2, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,8 +12,10 @@ interface ReferenceVideo {
   url?: string;
 }
 
-export default function ChunkInspector({ params }: { params: { id: string; chunkId: string } }) {
-  const { id, chunkId } = params;
+export default function ChunkInspector() {
+  const params = useParams<{ id: string; chunkId: string }>();
+  const id = params.id ?? "";
+  const chunkId = params.chunkId ?? "";
   const { api } = useAuth();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
