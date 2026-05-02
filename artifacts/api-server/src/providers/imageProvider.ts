@@ -8,11 +8,10 @@ import { safeFetch } from "../lib/safeFetch.js";
 
 export interface ImageRequest {
   prompt: string;
-  negativePrompt?: string;       // kept in interface for callers; ignored by Imagen 4
-  referenceUrls?: string[];      // kept in interface for callers; ignored by Imagen 4
-  aspectRatio?: string;          // "9:16", "16:9", "1:1", "3:4", "4:3" or named
+  negativePrompt?: string;
+  referenceUrls?: string[];
+  aspectRatio?: string;
   model?: string;
-  /** Ignored by Imagen 4 (no inference steps parameter). */
   numInferenceSteps?: number;
   userId?: string;
   projectId?: string;
@@ -28,7 +27,7 @@ export interface ImageResponse {
   raw?: unknown;
 }
 
-interface Imagen4TaskResponse {
+interface MagnificTaskResponse {
   data?: {
     task_id?: string;
     status?: string;
@@ -36,21 +35,25 @@ interface Imagen4TaskResponse {
   };
 }
 
-// ── Endpoint ─────────────────────────────────────────────────────────────────
-// Default to Imagen 4 Ultra. Override via env for testing or fallback.
-const IMAGE_ENDPOINT =
+// Two endpoints used in tandem for best quality + consistency:
+//   - Imagen 4 Ultra: highest visual fidelity, text-only (no reference support).
+//     Used for the master "full body reference" image of each character.
+//   - Nano Banana Pro: supports reference_images for consistency. Used for the
+//     3 angle views (front/¾/back) and any downstream image (storyboard
+//     panels, scene start/end frames) that needs to match an existing design.
+const IMAGEN4_ENDPOINT =
   process.env.MAGNIFIC_IMAGE_ENDPOINT || "/v1/ai/text-to-image/imagen4-ultra";
+const NANO_BANANA_ENDPOINT =
+  process.env.MAGNIFIC_IMAGE_REFERENCE_ENDPOINT || "/v1/ai/text-to-image/nano-banana-pro";
 
-// ── Aspect-ratio mapping ──────────────────────────────────────────────────────
-// Imagen 4 uses named strings; our internal code still passes the old "9:16"
-// shorthand, so normalise here before sending upstream.
-const ASPECT_RATIO_MAP: Record<string, string> = {
+// ── Aspect-ratio mapping ──────────────────────────────────────────────────
+// Imagen 4 uses named string aspect ratios; nano-banana accepts the short form.
+const IMAGEN4_ASPECT_MAP: Record<string, string> = {
   "9:16":  "social_story_9_16",
   "16:9":  "widescreen_16_9",
   "1:1":   "square_1_1",
   "3:4":   "traditional_3_4",
   "4:3":   "classic_4_3",
-  // pass-through if already named
   "social_story_9_16": "social_story_9_16",
   "widescreen_16_9":   "widescreen_16_9",
   "square_1_1":        "square_1_1",
@@ -59,10 +62,72 @@ const ASPECT_RATIO_MAP: Record<string, string> = {
 };
 
 function toImagen4AspectRatio(ar: string): string {
-  return ASPECT_RATIO_MAP[ar] ?? "widescreen_16_9";
+  return IMAGEN4_ASPECT_MAP[ar] ?? "widescreen_16_9";
 }
 
-// ── Storage helper ────────────────────────────────────────────────────────────
+// ── Reference image helpers (nano-banana expects base64, not URLs) ────────
+interface RefEntry { image: string; mime_type: string }
+
+const REF_CACHE_MAX = 64;
+const REF_CACHE_TTL_MS = 10 * 60 * 1000;
+const refCache = new Map<string, { entry: RefEntry; expiresAt: number }>();
+
+function refCacheGet(url: string): RefEntry | undefined {
+  const hit = refCache.get(url);
+  if (!hit) return undefined;
+  if (hit.expiresAt < Date.now()) {
+    refCache.delete(url);
+    return undefined;
+  }
+  refCache.delete(url);
+  refCache.set(url, hit);
+  return hit.entry;
+}
+
+function refCacheSet(url: string, entry: RefEntry): void {
+  if (refCache.size >= REF_CACHE_MAX) {
+    const oldestKey = refCache.keys().next().value;
+    if (oldestKey !== undefined) refCache.delete(oldestKey);
+  }
+  refCache.set(url, { entry, expiresAt: Date.now() + REF_CACHE_TTL_MS });
+}
+
+function inferMimeType(headerCT: string | null, url: string): string {
+  const ct = (headerCT || "").split(";")[0].trim().toLowerCase();
+  if (ct.startsWith("image/")) return ct;
+  const lower = url.toLowerCase().split("?")[0];
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "image/png";
+}
+
+async function buildReferenceImages(urls: string[]): Promise<RefEntry[]> {
+  const out: RefEntry[] = [];
+  for (const url of urls) {
+    const cached = refCacheGet(url);
+    if (cached) { out.push(cached); continue; }
+    try {
+      const res = await safeFetch(url);
+      if (!res.ok) {
+        logger.warn({ url, status: res.status }, "buildReferenceImages: skip bad ref");
+        continue;
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      const entry: RefEntry = {
+        image: buf.toString("base64"),
+        mime_type: inferMimeType(res.headers.get("content-type"), url),
+      };
+      refCacheSet(url, entry);
+      out.push(entry);
+    } catch (err) {
+      logger.warn({ err, url }, "buildReferenceImages: skip ref (fetch failed)");
+    }
+  }
+  return out;
+}
+
+// ── Storage helper ────────────────────────────────────────────────────────
 async function downloadAndStore(url: string, opts: {
   userId: string; projectId: string; assetType: string; filename?: string;
 }): Promise<{ url: string; sizeBytes: number }> {
@@ -80,7 +145,7 @@ async function downloadAndStore(url: string, opts: {
   return { url: saved.url, sizeBytes: saved.sizeBytes };
 }
 
-// ── Main export ───────────────────────────────────────────────────────────────
+// ── Main export ───────────────────────────────────────────────────────────
 export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
   if (DEMO_MODE) {
     return {
@@ -91,43 +156,57 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
     };
   }
 
-  const aspect = toImagen4AspectRatio(req.aspectRatio || "16:9");
+  const aspectShort = req.aspectRatio || "16:9";
+  const hasRefs = !!req.referenceUrls?.length;
 
-  // Imagen 4 Ultra parameters
-  const body: Record<string, unknown> = {
-    prompt:           req.prompt,
-    aspect_ratio:     aspect,
-    person_generation: "allow_adult",
-    safety_settings:  "block_only_high",
-    enhance_prompt:   true,
-    language:         "en",
-    output_options: {
-      mime_type:           "image/png",
-      compression_quality: 90,
-    },
-  };
+  // SMART ROUTING: when references are supplied, use nano-banana-pro
+  // (supports reference_images for character consistency). Otherwise use
+  // Imagen 4 Ultra for highest text-to-image quality.
+  const endpoint = hasRefs ? NANO_BANANA_ENDPOINT : IMAGEN4_ENDPOINT;
+  const useImagen = !hasRefs;
 
-  // Seed for reproducibility when a numeric seed is derivable from filename
-  if (req.filename) {
-    const numMatch = req.filename.match(/\d+/);
-    if (numMatch) {
-      const seed = (parseInt(numMatch[0], 10) % 4_294_967_295) || 1;
-      body.seed = seed;
+  let body: Record<string, unknown>;
+
+  if (useImagen) {
+    // Imagen 4 Ultra parameters
+    body = {
+      prompt:           req.prompt,
+      aspect_ratio:     toImagen4AspectRatio(aspectShort),
+      person_generation: "allow_adult",
+      safety_settings:  "block_only_high",
+      enhance_prompt:   true,
+      language:         "en",
+      output_options: {
+        mime_type:           "image/png",
+        compression_quality: 90,
+      },
+    };
+    if (req.filename) {
+      const numMatch = req.filename.match(/\d+/);
+      if (numMatch) {
+        const seed = (parseInt(numMatch[0], 10) % 4_294_967_295) || 1;
+        body.seed = seed;
+      }
+    }
+  } else {
+    // Nano Banana Pro parameters (supports reference_images)
+    body = {
+      prompt:        req.prompt,
+      aspect_ratio:  aspectShort,
+    };
+    if (req.negativePrompt) body.negative_prompt = req.negativePrompt;
+    if (req.numInferenceSteps) body.num_inference_steps = req.numInferenceSteps;
+    const refs = await buildReferenceImages(req.referenceUrls!);
+    if (refs.length > 0) {
+      body.reference_images = refs;
+      logger.debug({ count: refs.length, endpoint },
+        "imageProvider: routing to reference-aware endpoint");
+    } else {
+      logger.warn("imageProvider: refs requested but none could be encoded; quality may suffer");
     }
   }
 
-  // Note: Imagen 4 does NOT support reference_images, negative_prompt, or
-  // num_inference_steps. Those parameters are intentionally dropped here.
-  // Character consistency is maintained through the detailed text prompt.
-  if (req.negativePrompt) {
-    logger.debug("imageProvider: negative_prompt ignored (Imagen 4 not supported)");
-  }
-  if (req.referenceUrls?.length) {
-    logger.debug({ count: req.referenceUrls.length },
-      "imageProvider: referenceUrls ignored (Imagen 4 does not support reference_images)");
-  }
-
-  const submit = await magnificFetch<Imagen4TaskResponse>(IMAGE_ENDPOINT, {
+  const submit = await magnificFetch<MagnificTaskResponse>(endpoint, {
     method: "POST",
     body,
   });
@@ -136,15 +215,15 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
   const taskId = submit.data?.task_id;
 
   if ((!imageUrls || imageUrls.length === 0) && taskId) {
-    const final = await poll<Imagen4TaskResponse>(
-      () => magnificFetch<Imagen4TaskResponse>(`${IMAGE_ENDPOINT}/${taskId}`),
+    const final = await poll<MagnificTaskResponse>(
+      () => magnificFetch<MagnificTaskResponse>(`${endpoint}/${taskId}`),
       (v) => {
         const s = (v.data?.status || "").toUpperCase();
         if (s === "COMPLETED") return true;
         if (s === "FAILED") throw new MagnificError("Image generation failed", 502, v);
         return Array.isArray(v.data?.generated) && v.data!.generated!.length > 0;
       },
-      { intervalMs: 3000, timeoutMs: 5 * 60 * 1000 },
+      { intervalMs: 2500, timeoutMs: 5 * 60 * 1000 },
     );
     imageUrls = final.data?.generated;
   }
@@ -162,10 +241,10 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
         assetType: req.assetType || "images",
         filename: req.filename,
       });
-      return { url: stored.url, raw: { remoteUrl, taskId } };
+      return { url: stored.url, raw: { remoteUrl, taskId, endpoint } };
     } catch (err) {
       logger.warn({ err, remoteUrl }, "Failed to mirror image to local storage; using remote URL");
     }
   }
-  return { url: remoteUrl, raw: { taskId } };
+  return { url: remoteUrl, raw: { taskId, endpoint } };
 }

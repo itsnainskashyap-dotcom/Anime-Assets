@@ -62,7 +62,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryFn: () => api("/api/auth/me").then((res) => res.json() as Promise<User>),
     enabled: !!token,
     retry: false,
-    staleTime: 0,
+    // 30s stale time: avoids hammering /me on every component mount, but
+    // ensures admin/credit changes propagate without manual refresh.
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnMount: "always",
   });
 
   const loginMutation = useMutation<AuthResponse, Error, LoginInput>({

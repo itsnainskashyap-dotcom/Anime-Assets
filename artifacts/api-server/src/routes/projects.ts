@@ -357,23 +357,96 @@ router.post("/:id/characters/generate", requireAuth, generationLimiter, (req, re
   res.status(202).json({ jobId: task.id, status: "queued" });
 });
 
+/**
+ * "Lock Canon Designs" — finalizes character designs and kicks off the rest
+ * of the production pipeline (storyboard → visualization → production).
+ *
+ * The frontend "Lock Canon Designs" button is a project-wide action: it
+ * locks ALL characters that have at least a portrait ready. A specific
+ * characterId may also be passed for granular per-character locking.
+ */
 router.post("/:id/characters/approve-lock", requireAuth, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
-  const { characterId, visualSignature, referenceUrls } = req.body || {};
-  if (!characterId) {
-    res.status(400).json({ error: "characterId required" });
-    return;
+  const { characterId, visualSignature, referenceUrls } = (req.body || {}) as {
+    characterId?: string;
+    visualSignature?: string;
+    referenceUrls?: string[];
+  };
+
+  // Build the list of characters to lock:
+  //   - if characterId is supplied, lock that one
+  //   - otherwise lock every character in the project that has a portrait
+  let targets: { id: string; portrait_url: string | null }[];
+  if (characterId) {
+    const row = db
+      .prepare<[string, string], { id: string; portrait_url: string | null }>(
+        "SELECT id, portrait_url FROM characters WHERE id = ? AND project_id = ?",
+      )
+      .get(characterId, p.id);
+    if (!row) {
+      res.status(404).json({ error: "character not found in project" });
+      return;
+    }
+    if (!row.portrait_url) {
+      res.status(400).json({
+        error: "Character has no portrait yet — wait for generation to finish before locking.",
+        code: "CHARACTER_NOT_READY",
+      });
+      return;
+    }
+    targets = [row];
+  } else {
+    targets = db
+      .prepare<[string], { id: string; portrait_url: string | null }>(
+        "SELECT id, portrait_url FROM characters WHERE project_id = ? AND portrait_url IS NOT NULL",
+      )
+      .all(p.id);
+    if (targets.length === 0) {
+      res.status(400).json({
+        error: "No characters with completed portraits to lock yet — wait for generation to finish.",
+      });
+      return;
+    }
   }
-  const lock = approveLock({
-    characterId,
-    approvedBy: u.sub,
-    visualSignature: visualSignature || "auto",
-    referenceUrls: referenceUrls || [],
+
+  const locks = targets.map((t) =>
+    approveLock({
+      characterId: t.id,
+      approvedBy: u.sub,
+      visualSignature: visualSignature || "auto",
+      referenceUrls: referenceUrls || (t.portrait_url ? [t.portrait_url] : []),
+    }),
+  );
+
+  recordPlaygroundEvent({
+    projectId: p.id,
+    eventType: "character_locked",
+    agent: "character_director",
+    message: `${locks.length} character${locks.length === 1 ? "" : "s"} locked as canon — starting storyboard pipeline.`,
   });
-  recordPlaygroundEvent({ projectId: p.id, eventType: "character_locked", message: `Character ${characterId} locked` });
-  res.json({ ok: true, lock });
+
+  // Auto-chain into storyboard. enqueueStageOnce dedupes against any
+  // in-flight task so a double-click is safe.
+  const inflightSb = findInflightStage(p.id, "storyboard_generate");
+  if (!inflightSb) {
+    enqueueStageOnce({
+      type: "storyboard_generate",
+      stage: "storyboard_generate",
+      projectId: p.id,
+      userId: u.sub,
+      payload: {},
+    });
+    recordPlaygroundEvent({
+      projectId: p.id,
+      eventType: "pipeline_resumed",
+      agent: "production_director",
+      message: "Storyboard pipeline auto-started after character lock.",
+    });
+  }
+
+  res.json({ ok: true, locks, lockedCount: locks.length });
 });
 
 /**

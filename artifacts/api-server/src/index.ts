@@ -18,7 +18,20 @@ async function bootstrapAdmin(): Promise<void> {
     if (!existing.is_admin) {
       db.prepare("UPDATE users SET is_admin=1 WHERE id = ?").run(existing.id);
     }
+    // Reset password to match the env var on every boot. This makes the
+    // bootstrap idempotent — the operator can rotate ADMIN_PASSWORD via env
+    // and the new value takes effect on next restart, even if the user row
+    // already exists with an older hash. Without this, an admin user
+    // created with an old/forgotten password gets stuck unable to log in.
+    const hash = await bcrypt.hash(password, 10);
+    // Also ensure admin has plenty of credits (top up to 999_999 if low) so
+    // the operator can always run end-to-end pipelines without billing
+    // friction. Don't lower an already-higher balance.
+    db.prepare(
+      "UPDATE users SET password_hash = ?, credits = MAX(credits, 999999) WHERE id = ?",
+    ).run(hash, existing.id);
     db.prepare("INSERT OR IGNORE INTO admin_user_roles (user_id, role_name) VALUES (?, 'super_admin')").run(existing.id);
+    logger.info({ email }, "Admin user found; password reset and credits topped up from ADMIN_PASSWORD env");
     return;
   }
   const id = uuid();

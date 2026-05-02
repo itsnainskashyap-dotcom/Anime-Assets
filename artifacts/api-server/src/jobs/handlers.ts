@@ -632,13 +632,15 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     projectId: task.project_id,
     eventType: "characters_ready",
     agent: "character_director",
-    message: `Generated visuals for ${generated.length} characters.`,
+    message: `Generated visuals for ${generated.length} characters. Click "Lock Canon Designs" to start the storyboard.`,
     payload: { generated },
   });
 
-  // NOTE: The next pipeline stages (storyboard → visualization → production)
-  // are NOT auto-chained here to prevent unintended credit consumption.
-  // The user must explicitly trigger production from the Playground tab.
+  // NOTE: Storyboard auto-chain is deliberately NOT triggered here — the
+  // user may still want to upload reference images, regenerate angles, or
+  // approve canon designs first. The pipeline kicks off automatically from
+  // the /characters/approve-lock route once the user explicitly finalizes.
+  // See routes/projects.ts for that auto-trigger.
 
   return { generated };
 }
