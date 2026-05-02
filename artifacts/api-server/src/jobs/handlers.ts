@@ -92,27 +92,29 @@ function projectRow(projectId: string): {
 }
 
 function languageInstruction(lang: string): string {
+  // IMPORTANT: This instruction applies ONLY to dialogue/voiceover fields.
+  // All other JSON fields (synopsis, summaries, descriptions, atmosphere, etc.) MUST be in English.
   switch ((lang || "en").toLowerCase()) {
     case "hi":
-      return "Write all character dialogue lines in Hindi (Devanagari script). Character names should be Hindi/Indian. Story narration and scene descriptions should be in English but dialogue in Hindi.";
+      return "VOICEOVER LANGUAGE: Hindi (Devanagari script). Write the 'sampleDialogue' and 'keyDialogue' fields in Hindi. All other fields (synopsis, scene descriptions, atmosphere, act summaries, etc.) MUST remain in English.";
     case "hi-en":
-      return "Write all character dialogue lines in Hinglish (Roman-script Hindi-English mix, e.g. 'Tum mere saath aaoge?' or 'Yaar, kuch toh kar!' — NOT Devanagari). Character names can be Indian or mixed cultural style.";
+      return "VOICEOVER LANGUAGE: Hinglish (Roman-script Hindi-English mix, e.g. 'Tum mere saath aaoge?' or 'Yaar, kuch toh kar!' — NOT Devanagari). Write only 'sampleDialogue' and 'keyDialogue' in Hinglish. All other fields in English.";
     case "es":
-      return "Write all character dialogue lines in Spanish. Character names should be Spanish/Latin American. Story narration in English, dialogue in Spanish.";
+      return "VOICEOVER LANGUAGE: Spanish. Write only 'sampleDialogue' and 'keyDialogue' in Spanish. All other fields (synopsis, descriptions, atmosphere, etc.) MUST be in English.";
     case "ja":
-      return "Write all character dialogue lines in Japanese (romaji transliteration is fine, e.g. 'Watashi wa koko ni iru'). Character names should be Japanese. Narration in English, dialogue in Japanese.";
+      return "VOICEOVER LANGUAGE: Japanese (romaji is acceptable, e.g. 'Watashi wa koko ni iru'). Write only 'sampleDialogue' and 'keyDialogue' in Japanese. All other fields MUST be in English.";
     case "ko":
-      return "Write all character dialogue lines in Korean (or romanized Korean). Character names should be Korean. Narration in English, dialogue in Korean.";
+      return "VOICEOVER LANGUAGE: Korean (Hangul or romanized). Write only 'sampleDialogue' and 'keyDialogue' in Korean. All other fields MUST be in English.";
     case "fr":
-      return "Write all character dialogue lines in French. Character names can be French. Narration in English, dialogue in French.";
+      return "VOICEOVER LANGUAGE: French. Write only 'sampleDialogue' and 'keyDialogue' in French. All other fields MUST be in English.";
     case "pt":
-      return "Write all character dialogue lines in Portuguese (Brazilian). Character names can be Portuguese/Brazilian. Narration in English, dialogue in Portuguese.";
+      return "VOICEOVER LANGUAGE: Portuguese (Brazilian). Write only 'sampleDialogue' and 'keyDialogue' in Portuguese. All other fields MUST be in English.";
     case "zh":
-      return "Write all character dialogue lines in Mandarin Chinese (pinyin romanization is acceptable). Character names should be Chinese. Narration in English, dialogue in Chinese.";
+      return "VOICEOVER LANGUAGE: Mandarin Chinese (pinyin acceptable). Write only 'sampleDialogue' and 'keyDialogue' in Chinese. All other fields MUST be in English.";
     case "ar":
-      return "Write all character dialogue lines in Arabic (romanized/transliterated is fine). Character names should be Arabic. Narration in English, dialogue in Arabic.";
+      return "VOICEOVER LANGUAGE: Arabic (romanized/transliterated is acceptable). Write only 'sampleDialogue' and 'keyDialogue' in Arabic. All other fields MUST be in English.";
     default:
-      return "Write all character dialogue lines in English. Character names can be any cultural style appropriate to the story.";
+      return "VOICEOVER LANGUAGE: English. All fields including 'sampleDialogue' and 'keyDialogue' in English.";
   }
 }
 
@@ -189,8 +191,17 @@ async function handleStoryBible(task: JobTaskRow): Promise<Record<string, unknow
     db.prepare("INSERT INTO story_bibles (id, project_id, status) VALUES (?, ?, 'generating')").run(uuid(), task.project_id);
   }
 
+  // Announce to the playground NOW (before the slow LLM call) so users see live progress.
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "story_bible_generating",
+    agent: "story_director",
+    message: `Story Director is writing the ${format} bible for "${project.title}" (${genre}, ${Math.round(targetSeconds / 60)}m target, voiceover: ${projectLang})…`,
+    payload: { format, genre, lang: projectLang, targetSeconds, sceneMin, sceneMax },
+  });
+
   // Stream tokens → save partial output to DB every 1.5 s so the frontend
-  // can display a live typewriter effect while Claude is still writing.
+  // can display a live typewriter effect while the model is still writing.
   let partialBuf = "";
   let lastPartialSave = 0;
   const onToken = (chunk: string): void => {
@@ -206,8 +217,16 @@ async function handleStoryBible(task: JobTaskRow): Promise<Record<string, unknow
   };
 
   const { data } = await generateJson<StoryBibleData>({
-    systemPrompt:
-      "You are the Story Director of an AI anime studio. Convert briefs into complete, production-ready story bibles. Be vivid and specific. Output strict JSON ONLY.",
+    systemPrompt: `You are the Story Director of an AI anime production studio.
+Your task: convert a creative brief into a complete, production-ready story bible in strict JSON format.
+
+CRITICAL OUTPUT RULES — follow these exactly:
+1. Output ONLY a single valid JSON object. No markdown fences, no commentary, no text before or after the JSON.
+2. Every field defined in the schema MUST be present and populated with meaningful content. Do not omit or leave fields empty.
+3. ALL structural fields — synopsis, themes, tone, setting, act titles/summaries, scene titles/summaries/atmosphere/emotionalBeats/location/timeOfDay/emotion/shotType, character appearance/backstory/arc/voiceDescription — MUST be written in English. These fields drive image generation and animation pipelines that only understand English.
+4. ONLY the dialogue fields 'sampleDialogue' (characters) and 'keyDialogue' (scenes) should be written in the specified voiceover language. Everything else stays in English.
+5. Be vivid, cinematic and specific. Write descriptions that a visual artist or animator can directly act on.
+6. Respect the duration budget precisely — the sum of all scene durationSeconds must equal the target (±5%).`,
     onToken,
     userPrompt: `Build a complete story bible for an anime production.
 
@@ -215,7 +234,7 @@ INPUT
 - Working title: ${project.title}
 - Anime style/genre: ${genre}
 - Directorial voice style: ${voiceStyle}
-- Output language: ${projectLang} — ${langInstr}
+- Voiceover language: ${projectLang} — ${langInstr}
 - Total target duration: about ${targetSeconds} seconds
 - User brief / story prompt:
 """
@@ -224,12 +243,12 @@ ${storyPrompt}
 
 REQUIREMENTS
 - Produce 2–${actMax} acts whose total estimatedDurationSeconds adds up to EXACTLY ${targetSeconds} (±5%).
-- Produce 2–6 named characters with FULLY DETAILED appearance (hair, eyes, outfit, distinguishing features) — visual consistency lock. Each character MUST have a sampleDialogue with 2–3 lines in the OUTPUT LANGUAGE.
-- Produce ${sceneMin}–${sceneMax} scenes covering the full arc. Each scene MUST have: visual summary, shotType (wide/medium/closeup/extreme-closeup), location, timeOfDay, emotion, durationSeconds (${perSceneMin}–${perSceneMax} each), emotionalBeats (2–3 bullet points of character internal state changes), atmosphere (lighting, sound design, mood details for the animator), and keyDialogue (1–2 lines of actual spoken dialogue in the OUTPUT LANGUAGE, in quotes).
-- The SUM of all scene durationSeconds MUST equal ${targetSeconds} (±5%). Scale scene count to fill the time budget fully — no gaps.
-- sceneNumber is sequential from 1; each scene is assigned to an actNumber.
-- Themes: 2–4 short phrases. Synopsis: exactly 3 rich sentences.
-- ALL text fields (synopsis, act summaries, scene summaries, dialogue) MUST be in the output language: ${projectLang}.
+- Produce 2–6 named characters with FULLY DETAILED appearance (hair color, hair style, eye color, skin tone, height, build, outfit, distinguishing features) — these drive consistent image generation. Each character MUST have a sampleDialogue array with 2–3 spoken lines written in the VOICEOVER LANGUAGE (${projectLang}).
+- Produce ${sceneMin}–${sceneMax} scenes covering the full story arc. Each scene MUST include: title, visual summary, shotType (wide/medium/closeup/extreme-closeup), location, timeOfDay, emotion, durationSeconds (${perSceneMin}–${perSceneMax}), emotionalBeats (array of 2–3 internal character state changes), atmosphere (lighting, sound, mood — written for animators, in English), and keyDialogue (array of 1–2 actual spoken lines in the VOICEOVER LANGUAGE, in quotes).
+- The SUM of all scene durationSeconds MUST equal ${targetSeconds} (±5%). Scale scene count to fill the time budget fully.
+- sceneNumber is sequential from 1; each scene must be assigned to an actNumber.
+- Themes: array of 2–4 short English phrases. Synopsis: exactly 3 rich English sentences.
+- LANGUAGE RULE: Synopsis, themes, tone, setting, act summaries, scene summaries, atmosphere, emotionalBeats → English. Only sampleDialogue and keyDialogue → ${projectLang}.
 
 JSON SCHEMA
 {
@@ -393,6 +412,15 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     return { skipped: true, reason: "no_characters" };
   }
 
+  // Announce to the playground immediately so users see the stage go active.
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "character_generate",
+    agent: "character_director",
+    message: `Character Director starting visual design for ${characters.length} character(s) — full body reference + 3 angle views each.`,
+    payload: { characterCount: characters.length },
+  });
+
   const animeStyle = project.genre || "modern anime";
   const publicBase = process.env.PUBLIC_BASE_URL || "";
   // Convert a stored asset URL into something the upstream image API can
@@ -499,9 +527,9 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
       ).run(img.url, char.id);
       recordPlaygroundEvent({
         projectId: task.project_id!,
-        eventType: "character_image_ready",
+        eventType: "character_generated",
         agent: "character_director",
-        message: `${char.name}: full body reference ready.`,
+        message: `${char.name}: full body reference ready — generating 3 angle views.`,
         payload: { characterId: char.id, field: "portrait_url", url: img.url },
       });
       generated.push({ id: char.id, name: char.name, portraitUrl: img.url });
@@ -534,7 +562,7 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
         ).run(img.url, char.id);
         recordPlaygroundEvent({
           projectId: task.project_id!,
-          eventType: "character_image_ready",
+          eventType: "character_sheet_ready",
           agent: "character_director",
           message: `${char.name}: ${angle.field.replace(/_url$/, "").replace(/_/g, " ")} ready.`,
           payload: { characterId: char.id, field: angle.field, url: img.url },
@@ -543,6 +571,14 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
         logger.error({ err, characterId: char.id, angle: angle.field }, "Character view generation failed");
       }
     }));
+    // All 4 images done for this character.
+    recordPlaygroundEvent({
+      projectId: task.project_id!,
+      eventType: "character_locked",
+      agent: "character_director",
+      message: `${char.name}: all 4 views complete — character locked.`,
+      payload: { characterId: char.id, name: char.name },
+    });
   });
 
   if (attempted > 0 && generated.length === 0) {
@@ -579,9 +615,9 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
           ).run(img.url, char.id);
           recordPlaygroundEvent({
             projectId: task.project_id!,
-            eventType: "character_image_ready",
+            eventType: "character_sheet_ready",
             agent: "character_director",
-            message: `${char.name}: ${angle.field.replace(/_url$/, "").replace(/_/g, " ")} ready (retry).`,
+            message: `${char.name}: ${angle.field.replace(/_url$/, "").replace(/_/g, " ")} ready.`,
             payload: { characterId: char.id, field: angle.field, url: img.url },
           });
         } catch (err) {
@@ -611,6 +647,12 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
 async function handleStoryboard(task: JobTaskRow): Promise<Record<string, unknown>> {
   if (!task.project_id || !task.user_id) throw new Error("storyboard_generate requires project_id");
   setProjectStage(task.project_id, "storyboard", 50);
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "storyboard_generate",
+    agent: "storyboard_director",
+    message: "Storyboard Composer is splitting scenes into 10-second video chunks…",
+  });
 
   const scenes = db
     .prepare<[string], {

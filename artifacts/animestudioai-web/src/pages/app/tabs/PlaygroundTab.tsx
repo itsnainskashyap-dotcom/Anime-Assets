@@ -39,20 +39,20 @@ const STAGES: Stage[] = [
     description: "Capturing your premise, tone and runtime target.",
     matchEvent: (e) => /intake|story_prompt|project_created/i.test(e.event_type) },
   { id: "story", label: "Story Director", icon: PiMagicWandDuotone, agent: "Story Director",
-    description: "Drafting the full story with acts, twists and climax.",
-    matchEvent: (e) => /story_bible_(generate|generating|ready)|story_director/i.test(e.event_type) },
+    description: "Drafting the full story with acts, twists and climax — JSON in English, voiceover in your chosen language.",
+    matchEvent: (e) => /story_bible_(generate|generating|ready)|story_director|awaiting_finalization/i.test(e.event_type) },
   { id: "finalize", label: "Story Finalization", icon: ShieldCheck, agent: "You + Story Director",
     description: "Review and lock the story before character build.",
     matchEvent: (e) => /story_finalized|story_unfinalized/i.test(e.event_type) },
   { id: "bible", label: "Story Bible", icon: BookOpen, agent: "Story Bible Agent",
     description: "World rules, lore, motifs and continuity constraints.",
-    matchEvent: (e) => /story_bible_approved|story_bible_ready/i.test(e.event_type) },
+    matchEvent: (e) => /story_bible_approved|story_bible_ready|awaiting_finalization/i.test(e.event_type) },
   { id: "characters", label: "Character Studio", icon: Users, agent: "Character Director",
-    description: "Hero/antagonist designs from story or uploaded refs.",
-    matchEvent: (e) => /character_(generate|generated|locked)/i.test(e.event_type) },
+    description: "Full body reference + 3-angle model sheets per character.",
+    matchEvent: (e) => /character_(generate|generated|locked)|characters_ready/i.test(e.event_type) },
   { id: "turnaround", label: "Turnaround Sheets", icon: Layers, agent: "Character Director",
-    description: "Multi-angle reference sheet per locked character.",
-    matchEvent: (e) => /turnaround|angle_sheet/i.test(e.event_type) },
+    description: "Front · ¾ · back views generated from the full body reference.",
+    matchEvent: (e) => /character_sheet_ready|character_locked|turnaround|angle_sheet/i.test(e.event_type) },
   { id: "environments", label: "Environment Studio", icon: Mountain, agent: "Environment Director",
     description: "Locations, time-of-day, weather, mood boards.",
     matchEvent: (e) => /environment_(generate|generated|locked)/i.test(e.event_type) },
@@ -60,7 +60,7 @@ const STAGES: Stage[] = [
     description: "Per-chunk start frame, end frame, anchor stills.",
     matchEvent: (e) => /(start|end)_frame|visualization_(generate|generated)/i.test(e.event_type) },
   { id: "storyboard", label: "Storyboard Composer", icon: LayoutTemplate, agent: "Storyboard Composer",
-    description: "Composite 8-panel sheet aligned with the chunk video prompt.",
+    description: "Scenes split into 10-second video chunks ready for rendering.",
     matchEvent: (e) => /storyboard_(generate|generated|ready)/i.test(e.event_type) },
   { id: "viz", label: "Visualization Pack", icon: Layers, agent: "Visualization Director",
     description: "Frames + storyboard + refs bundled per chunk.",
@@ -191,6 +191,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
     staleTime: 30_000,
   });
 
+  const bibleGenerating = bible && bible.status === "generating";
   const bibleReady = bible && (bible.status === "ready" || bible.status === "approved");
   const parsedBible = bibleReady && bible.arcs_json ? (() => {
     try { return JSON.parse(bible.arcs_json as string) as Record<string, unknown>; } catch { return null; }
@@ -517,6 +518,23 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                 </div>
               </div>
 
+              {/* ── Bible Generating Banner ──────────────────────────── */}
+              {bibleGenerating && !bibleReady && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-2xl border border-primary/30 bg-primary/5 p-4 flex items-center gap-3"
+                >
+                  <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground">Story Director is writing your bible…</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      All descriptions in English · Voiceover lines in {langFlag} {langName} · Switch to the Story Bible tab for a live typewriter preview.
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+
               {/* ── Story Data Panel ─────────────────────────────────── */}
               {bibleReady && (
                 <motion.div
@@ -532,11 +550,11 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                   >
                     <PiBookOpenDuotone className="w-4 h-4 text-primary shrink-0" />
                     <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground flex-1 text-left">
-                      Story Data
+                      Story Bible
                     </span>
-                    {/* Language badge */}
+                    {/* Language badge — voiceover only */}
                     <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-primary/10 border border-primary/20 text-primary rounded-full px-2 py-0.5 mr-2">
-                      {langFlag} {langName}
+                      {langFlag} VO: {langName}
                     </span>
                     {storyDataOpen ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
                   </button>
@@ -629,7 +647,10 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                                       </div>
                                     </div>
                                     {c.sampleDialogue && c.sampleDialogue[0] && (
-                                      <p className="text-[10px] text-amber-300/70 italic line-clamp-2">"{c.sampleDialogue[0]}"</p>
+                                      <div className="flex items-start gap-1">
+                                        <span className="text-[9px] text-primary/50 shrink-0">{langFlag}</span>
+                                        <p className="text-[10px] text-amber-300/70 italic line-clamp-2">"{c.sampleDialogue[0]}"</p>
+                                      </div>
                                     )}
                                   </motion.div>
                                 ))}
@@ -643,16 +664,25 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                               <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70">
                                 Scenes ({scenes.length} total)
                               </div>
-                              <div className="space-y-1.5">
-                                {scenes.slice(0, 4).map((s, i) => (
-                                  <div key={i} className="flex gap-2 text-[10px]">
-                                    <span className="text-primary/60 shrink-0 font-mono w-4">{s.sceneNumber ?? i + 1}.</span>
-                                    <span className="text-muted-foreground truncate">{s.title}</span>
-                                    {s.emotion && <Badge variant="outline" className="text-[9px] border-amber-500/20 text-amber-400/70 shrink-0">{s.emotion}</Badge>}
+                              <div className="space-y-2">
+                                {scenes.slice(0, 5).map((s, i) => (
+                                  <div key={i} className="p-2 rounded-lg bg-background/30 border border-border/30 space-y-1">
+                                    <div className="flex gap-2 text-[10px]">
+                                      <span className="text-primary/60 shrink-0 font-mono w-4">{s.sceneNumber ?? i + 1}.</span>
+                                      <span className="text-foreground/80 font-medium truncate">{s.title}</span>
+                                      {s.emotion && <Badge variant="outline" className="text-[9px] border-amber-500/20 text-amber-400/70 shrink-0">{s.emotion}</Badge>}
+                                      {s.location && <span className="text-muted-foreground/60 shrink-0 truncate hidden sm:block">{s.location}</span>}
+                                    </div>
+                                    {s.keyDialogue && s.keyDialogue[0] && (
+                                      <div className="flex items-start gap-1.5 pl-6">
+                                        <span className="text-[9px] uppercase tracking-wider text-primary/50 shrink-0 mt-0.5">{langFlag} VO</span>
+                                        <p className="text-[10px] text-amber-300/70 italic line-clamp-1">"{s.keyDialogue[0]}"</p>
+                                      </div>
+                                    )}
                                   </div>
                                 ))}
-                                {scenes.length > 4 && (
-                                  <p className="text-[10px] text-muted-foreground/60 italic">+{scenes.length - 4} more scenes…</p>
+                                {scenes.length > 5 && (
+                                  <p className="text-[10px] text-muted-foreground/60 italic">+{scenes.length - 5} more scenes…</p>
                                 )}
                               </div>
                             </motion.div>
