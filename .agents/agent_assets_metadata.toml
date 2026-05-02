@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "3mUdqwBNQBu49CU6UmD5m"
+uri = "file://attached_assets/storyboard_chunk1_demo.png"
+type = "image"
+title = "Chunk 1 storyboard (8 cinematic panels, AI-generated)"

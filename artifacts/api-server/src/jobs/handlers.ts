@@ -19,6 +19,7 @@ import { pool } from "../lib/concurrency.js";
 import ffmpegPath from "ffmpeg-static";
 import { compileChunkPrompt } from "../services/promptCompiler.js";
 import { buildVisualizationPack } from "../services/visualizationDirector.js";
+import { runChunkStoryboard } from "../services/storyboardComposer.js";
 import { trimReferenceVideoTo10s } from "../services/referenceVideo.js";
 import { generateAudioForChunk } from "../services/audioDirector.js";
 import { runCapabilityProbe } from "../services/capabilityTester.js";
@@ -677,11 +678,36 @@ async function handleProductionPipeline(task: JobTaskRow): Promise<Record<string
   const attemptByChunk = new Map(chunkAttempts.map((c) => [c.id, c.attempt_number ?? 0]));
 
   const chunkTaskIds: string[] = [];
+  const storyboardTaskIds: string[] = [];
   // Sequential: each chunk depends on the previous one so chunk N can use the
   // previous chunk's video as its reference for reference-to-video mode.
+  // ALSO: every chunk gets a MANDATORY storyboard task that the video task
+  // depends on — the video step is gated on its own storyboard being ready.
   let prevTaskId: string | undefined;
   for (const c of chunks) {
     const cycle = attemptByChunk.get(c.id) ?? 0;
+
+    // Reset any previous storyboard so a re-run regenerates a fresh sheet.
+    db.prepare(
+      `UPDATE video_chunks
+         SET storyboard_status = 'pending', storyboard_error_message = NULL
+       WHERE id = ?`,
+    ).run(c.id);
+
+    const sb = enqueueTask({
+      type: "chunk_storyboard_generate",
+      stage: "chunk_storyboard_generate",
+      projectId: task.project_id,
+      userId: task.user_id,
+      chunkId: c.id,
+      payload: { chunkId: c.id },
+      idempotencyKey: `${task.project_id}:storyboard:${c.id}:cycle:${cycle}`,
+    });
+    storyboardTaskIds.push(sb.id);
+
+    const dependsOn = [sb.id];
+    if (prevTaskId) dependsOn.push(prevTaskId);
+
     const t = enqueueTask({
       type: "video_chunk_generate",
       stage: "video_chunk_generate",
@@ -690,7 +716,7 @@ async function handleProductionPipeline(task: JobTaskRow): Promise<Record<string
       chunkId: c.id,
       payload: { chunkId: c.id },
       idempotencyKey: `${task.project_id}:chunk:${c.id}:cycle:${cycle}`,
-      dependsOn: prevTaskId ? [prevTaskId] : undefined,
+      dependsOn,
     });
     chunkTaskIds.push(t.id);
     prevTaskId = t.id;
@@ -713,11 +739,35 @@ async function handleProductionPipeline(task: JobTaskRow): Promise<Record<string
     projectId: task.project_id,
     eventType: "production_planned",
     agent: "production_director",
-    message: `Queued ${chunks.length} video chunks + final export.`,
-    payload: { chunkTaskIds, exportTaskId: exportTask.id },
+    message: `Queued ${chunks.length} storyboards + ${chunks.length} video chunks + final export.`,
+    payload: { storyboardTaskIds, chunkTaskIds, exportTaskId: exportTask.id },
   });
 
-  return { chunkTaskIds, exportTaskId: exportTask.id };
+  return { storyboardTaskIds, chunkTaskIds, exportTaskId: exportTask.id };
+}
+
+// ─── CHUNK STORYBOARD ────────────────────────────────────────────────────
+// Plans 6–12 cinematic shots and renders them as ONE composite anime grid
+// image per 10s chunk. The video_chunk_generate task is dependsOn-gated on
+// this stage, so video generation cannot run without a storyboard sheet.
+async function handleChunkStoryboard(task: JobTaskRow): Promise<Record<string, unknown>> {
+  if (!task.project_id || !task.user_id) {
+    throw new Error("chunk_storyboard_generate requires project_id");
+  }
+  const payload = task.payload_json
+    ? (JSON.parse(task.payload_json) as { chunkId?: string })
+    : {};
+  const chunkId = task.chunk_id || payload.chunkId;
+  if (!chunkId) throw new Error("chunk_storyboard_generate requires chunkId");
+
+  const r = await runChunkStoryboard(chunkId);
+  return {
+    chunkId,
+    storyboardImageUrl: r.imageUrl,
+    shotCount: r.shotCount,
+    generationModel: r.generationModel,
+    generationTimeMs: r.generationTimeMs,
+  };
 }
 
 // ─── VIDEO CHUNK ─────────────────────────────────────────────────────────
@@ -741,11 +791,23 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
       start_frame_image_url: string | null;
       end_frame_image_url: string | null;
       seed_frame_image_url: string | null;
+      storyboard_image_url: string | null;
+      storyboard_status: string | null;
     }>(
-      "SELECT id, project_id, scene_id, chunk_number, duration_seconds, prompt_text, generation_mode, reference_video_url, reference_video_trimmed_url, start_frame_image_url, end_frame_image_url, seed_frame_image_url FROM video_chunks WHERE id = ?",
+      "SELECT id, project_id, scene_id, chunk_number, duration_seconds, prompt_text, generation_mode, reference_video_url, reference_video_trimmed_url, start_frame_image_url, end_frame_image_url, seed_frame_image_url, storyboard_image_url, storyboard_status FROM video_chunks WHERE id = ?",
     )
     .get(chunkId);
   if (!chunk) throw new Error("chunk not found");
+
+  // Storyboard is MANDATORY: the production_pipeline gates video on its own
+  // storyboard task via dependsOn, so reaching this handler without a ready
+  // storyboard means something bypassed the queue. Fail loudly.
+  if (chunk.storyboard_status !== "ready" || !chunk.storyboard_image_url) {
+    throw new Error(
+      `video_chunk_generate: chunk ${chunk.chunk_number} has no ready storyboard ` +
+        `(status=${chunk.storyboard_status || "missing"}). Run chunk_storyboard_generate first.`,
+    );
+  }
 
   db.prepare("UPDATE video_chunks SET status='generating', attempt_number = attempt_number + 1 WHERE id = ?").run(chunkId);
   recordAgentLog({
@@ -870,6 +932,22 @@ async function handleVideoChunk(task: JobTaskRow): Promise<Record<string, unknow
     imageRefsApi.push(url);
     imageRefLabels.push({ label });
   };
+  // The chunk's own storyboard sheet is the highest-priority reference: it
+  // already encodes shot composition, camera angles and on-model characters
+  // for THIS specific 10s beat. Push it first so the budget trim below keeps
+  // it in even when characters fill most of the slots.
+  const storyboardAbs = toAbsolute(chunk.storyboard_image_url);
+  if (chunk.storyboard_image_url && !storyboardAbs) {
+    // The storyboard exists but we cannot resolve it to a URL the upstream
+    // video API can fetch. This usually means PUBLIC_BASE_URL is unset for a
+    // local /storage/ path. Loud-log so we never silently degrade the most
+    // important per-chunk reference.
+    logger.warn(
+      { chunkId: chunk.id, storyboardUrl: chunk.storyboard_image_url, publicBase },
+      "video_chunk_generate: storyboard image cannot be made absolute (PUBLIC_BASE_URL?), skipping reference",
+    );
+  }
+  pushImageRef(storyboardAbs, "chunk storyboard sheet");
   pushImageRef(toAbsolute(sceneViz?.scene_board_url || null), "scene composition board");
   pushImageRef(toAbsolute(elementUrls[0]), "scene element 1");
   pushImageRef(toAbsolute(elementUrls[1]), "scene element 2");
@@ -1767,6 +1845,7 @@ export const HANDLERS = {
   storyboard_generate: handleStoryboard,
   visualization_generate: handleVisualization,
   production_pipeline: handleProductionPipeline,
+  chunk_storyboard_generate: handleChunkStoryboard,
   video_chunk_generate: handleVideoChunk,
   audio_chunk_generate: handleAudioChunk,
   reference_video_trim: handleReferenceVideoTrim,

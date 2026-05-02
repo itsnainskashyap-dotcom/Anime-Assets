@@ -196,6 +196,17 @@ CREATE TABLE IF NOT EXISTS video_chunks (
   scene_board_image_url TEXT,
   element_1_url TEXT,
   element_2_url TEXT,
+  -- Storyboard Composer: composite anime-grid storyboard image generated
+  -- BEFORE video generation and used as a Kling reference image.
+  storyboard_status TEXT NOT NULL DEFAULT 'pending',
+  storyboard_image_url TEXT,
+  storyboard_shot_count INTEGER,
+  storyboard_prompt TEXT,
+  storyboard_metadata_json TEXT,
+  selected_shots_json TEXT,
+  storyboard_generation_model TEXT,
+  storyboard_generation_time_ms INTEGER,
+  storyboard_error_message TEXT,
   video_url TEXT,
   audio_url TEXT,
   subtitles_url TEXT,

@@ -1,0 +1,239 @@
+Create a production-grade “Storyboard Composer” system inside AnimeStudioAI.
+
+OBJECTIVE:
+For every video chunk, automatically generate a single composite storyboard image that visually represents the full chunk as a sequence of numbered shots. This storyboard must be used as a reference image for the video generation pipeline.
+
+CORE RULE:
+Each chunk = 10 seconds.
+The storyboard must be created according to that 10-second chunk only, not for the entire story at once.
+
+WHAT THE SYSTEM MUST DO:
+1. Take the approved story, scene breakdown, chunk text, continuity memory, character locks, location locks, and style locks.
+2. Analyze the 10-second chunk and determine how many visual cut scenes / shots are needed.
+3. Create an internal shot plan for the chunk.
+4. Generate ONE single composite storyboard image showing all required shots in a clean numbered grid.
+5. Save this storyboard image and pass it forward as the reference image for Kling video generation.
+
+STORYBOARD REQUIREMENTS:
+- One chunk = one storyboard image.
+- The storyboard must be a single image containing multiple panels.
+- Each panel must be clearly numbered in sequence.
+- Number of panels should depend on the visual complexity of the chunk.
+- Recommended range: 6 to 12 panels for a 10-second chunk.
+- Default target: 8 panels unless pacing requires more or fewer.
+- Panels must represent the actual shot progression of that chunk.
+- The storyboard should look like a cinematic anime shot board, not a UI mockup.
+- It must feel like a director’s visual planning board.
+- The full image should be easy for the model and the user to understand at a glance.
+
+VISUAL DESIGN OF THE STORYBOARD:
+- Single composite grid layout.
+- Large title at top: “STORYBOARD”.
+- Clean dark background or neutral cinematic presentation background.
+- Multiple rectangular image panels arranged in a grid.
+- Each panel must contain an anime-style frame preview.
+- Panel number must be visible at top-left of each panel.
+- The entire board should feel polished, cinematic, modern, and presentation-ready.
+- It must not look AI-generated in a cheap way.
+- It must look like a professional visual storyboard sheet.
+
+SHOT CONTENT RULES:
+Each panel should represent one meaningful visual beat, such as:
+- establishing shot
+- character close-up
+- reaction shot
+- action shot
+- motion beat
+- insert shot
+- transition beat
+- final dramatic composition
+
+The panel sequence must reflect actual visual progression inside the 10-second chunk.
+
+CONTINUITY RULES:
+The storyboard generator must preserve:
+- same character appearance
+- same costume
+- same hairstyle
+- same color palette
+- same props
+- same environment
+- same time of day
+- same mood
+- same direction of action
+- same cinematic style
+- same anime rendering language
+
+The system must use:
+- character lock data
+- environment lock data
+- style lock data
+- previous chunk end frame when relevant
+- current chunk start frame plan
+- scene memory
+- project continuity memory
+
+CHUNK-BASED STORYBOARD LOGIC:
+For each chunk:
+1. Read the chunk narrative.
+2. Identify key visual beats.
+3. Decide the number of shots needed for proper visual storytelling.
+4. Build a shot list with:
+   - shot_number
+   - shot_type
+   - framing
+   - camera_angle
+   - subject
+   - action
+   - emotion
+   - environment
+   - transition_note
+5. Convert the shot list into a single storyboard generation prompt.
+6. Generate the composite storyboard image.
+7. Save the result in the database and object storage.
+8. Pass storyboard URL into the video pipeline.
+
+SHOT COUNT GUIDANCE FOR 10-SECOND CHUNK:
+- Slow emotional chunk: 4–6 shots
+- Standard cinematic chunk: 6–8 shots
+- Action-heavy chunk: 8–12 shots
+The system should choose automatically.
+
+IMPORTANT:
+The storyboard is not just for display.
+It is an actual functional pipeline asset.
+
+VIDEO PIPELINE USAGE:
+The generated storyboard image must be passed as a reference image to the Kling video generation step for that chunk, alongside other necessary inputs like:
+- start frame image
+- end frame image (if used by pipeline)
+- character reference images
+- environment reference images
+- style reference images
+- chunk prompt
+
+If only a limited number of reference images are allowed, prioritize intelligently:
+1. start frame
+2. end frame
+3. storyboard composite
+4. character reference
+5. environment/style reference
+
+STORYBOARD IMAGE PROMPTING RULES:
+When generating the storyboard composite image, the prompt must explicitly instruct the image model to create:
+- a single storyboard sheet
+- multiple numbered anime panels
+- cinematic shot progression
+- consistent character identity
+- consistent environment
+- visually readable sequential storytelling
+- high-detail anime scene frames
+- polished cinematic composition
+- no random extra panels
+- no text clutter except title and panel numbers
+
+IMAGE GENERATION STYLE:
+- cinematic anime
+- premium handcrafted feel
+- sharp composition
+- dramatic lighting
+- storyboard readability
+- visually cohesive panels
+- no mismatched character faces
+- no inconsistent costume drift
+- no unrelated objects
+- no broken anatomy
+
+STORYBOARD OUTPUT DATA MODEL:
+For each chunk, create and store:
+- chunk_id
+- scene_id
+- storyboard_status
+- storyboard_shot_count
+- storyboard_prompt
+- storyboard_image_url
+- storyboard_metadata_json
+- selected_shots_json
+- generation_model
+- generation_time_ms
+- created_at
+
+REQUIRED INTERNAL JSON OUTPUT BEFORE IMAGE GENERATION:
+{
+  "chunk_id": "string",
+  "duration_seconds": 10,
+  "recommended_shot_count": 8,
+  "visual_pacing": "slow|standard|fast|action",
+  "shots": [
+    {
+      "shot_number": 1,
+      "shot_type": "establishing",
+      "framing": "wide",
+      "camera_angle": "low angle",
+      "subject": "main character on rooftop",
+      "action": "looks toward ruined city",
+      "emotion": "determined",
+      "environment": "sunset cyberpunk skyline",
+      "transition_note": "opens the chunk"
+    }
+  ]
+}
+
+STORYBOARD GENERATION PROMPT TEMPLATE:
+Generate a single composite storyboard sheet for one 10-second anime video chunk.
+The image must contain [X] numbered panels arranged in a clean grid.
+Add a clear heading at the top: “STORYBOARD”.
+Each panel must show one sequential cinematic anime shot from the same chunk.
+Preserve the same main character identity, costume, hairstyle, and environment across panels.
+Use a cohesive cinematic anime style with professional lighting and strong composition.
+The panels must visually progress from shot 1 to shot [X].
+Do not create random unrelated scenes.
+Do not create a UI screenshot.
+Do not add unnecessary interface elements.
+Only include the storyboard heading and panel numbers.
+The panel content should represent these beats:
+[insert structured shot list here]
+
+QUALITY RULES:
+Reject and regenerate storyboard if:
+- character identity changes between panels
+- panel sequence feels random
+- the board looks like a collage instead of a real storyboard
+- numbering is missing
+- too few or too many panels for the chunk pacing
+- visual continuity is poor
+- anatomy is broken
+- the environment changes unexpectedly
+- the board includes irrelevant text
+
+PIPELINE INTEGRATION:
+After generating the storyboard:
+- upload image to storage
+- link it to the chunk record
+- expose it in the UI
+- show it in Playground and Chunk Details view
+- allow user to inspect it
+- mark it as “reference-ready”
+- send it to Kling generation stage as a reference asset
+
+UI REQUIREMENTS:
+In the chunk view, show:
+- chunk title
+- chunk duration
+- shot count
+- storyboard preview
+- regenerate storyboard button
+- approve storyboard button
+- expand full resolution button
+
+In playground live status:
+- “Analyzing chunk”
+- “Planning shots”
+- “Composing storyboard”
+- “Generating storyboard image”
+- “Storyboard ready”
+- “Sending assets to video generation”
+
+FINAL IMPLEMENTATION RULE:
+Storyboard generation is mandatory for every chunk before video generation.
+A chunk cannot proceed to video generation until the storyboard image is successfully created and attached.

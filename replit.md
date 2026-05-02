@@ -202,3 +202,50 @@ api-server artifact intentionally diverges from the workspace defaults:
     drops `/storage/...` refs when `PUBLIC_BASE_URL` is unset —
     passing a relative URL the upstream image API can't fetch was
     silently degrading consistency.
+- **Storyboard Composer** (`services/storyboardComposer.ts`,
+  `jobs/handlers.ts:handleChunkStoryboard`): every 10s `video_chunk`
+  gets ONE composite anime storyboard image (numbered grid of 6–12
+  cinematic panels with a "STORYBOARD" title) generated BEFORE the
+  video step and persisted on the chunk row alongside the planned
+  shot list. Two-phase pipeline:
+  1. **Plan**: `planChunkShots` calls Claude to break the chunk into
+     6/8/10-12 shots (slow/medium/fast pacing), each with shotType,
+     cameraAngle, description, characterAction, emotion, and
+     approxDurationSeconds. Strict JSON, defensively clamped to 6–12.
+  2. **Render**: `composeStoryboardImage` builds a single Magnific
+     prompt describing a `cols×rows` grid (auto-picked from
+     `gridForShots`), references the chunk's `start_frame_url` plus
+     up to 2 character portraits/model-sheets, and saves the result
+     to `chunks/<chunkId>/storyboard.png`.
+
+  New `video_chunks` columns (added via `db/index.ts` column
+  migrations + `schema.sql`): `storyboard_status` (pending/generating/
+  ready/failed), `storyboard_image_url`, `storyboard_shot_count`,
+  `storyboard_prompt`, `storyboard_metadata_json` (grid + pacing +
+  notes), `selected_shots_json` (full Claude shot list),
+  `storyboard_generation_model`, `storyboard_generation_time_ms`,
+  `storyboard_error_message`.
+
+  **Mandatory gating**: `handleProductionPipeline` enqueues a
+  `chunk_storyboard_generate` task per chunk and the corresponding
+  `video_chunk_generate` task carries `dependsOn: [storyboardTaskId,
+  prevVideoTaskId]` so the queue worker physically cannot start
+  video generation before the storyboard is `ready`. Belt-and-
+  suspenders: `handleVideoChunk` re-checks `storyboard_status ===
+  'ready' && storyboard_image_url` and throws otherwise.
+
+  **Wired into Kling refs**: the storyboard sheet is pushed FIRST
+  into `imageRefsApi` (highest-priority ref label "chunk storyboard
+  sheet") so it survives the 4-slot `image_urls + elements` budget
+  even when 3 character locks are present. This gives Kling-Omni-Pro
+  a per-chunk shot map that already encodes composition + characters
+  for that specific 10s beat.
+
+  **Pre-existing bug fix surfaced by this work**: the Magnific
+  nano-banana-pro endpoint now requires `mime_type` on every
+  `reference_images[]` entry (previously they accepted bare
+  `{image:b64}`). `imageProvider.ts:buildReferenceImages` now
+  emits `{image, mime_type}` with `inferMimeType` from the
+  `Content-Type` header (fallback PNG). This unblocks character
+  model sheets, scene visualizations, AND the new storyboard
+  composer — all three were silently 400-ing before.

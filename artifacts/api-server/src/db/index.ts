@@ -30,6 +30,18 @@ db.exec(schemaSql);
  */
 const columnMigrations: Array<[string, string, string]> = [
   ["video_chunks", "seed_frame_image_url", "TEXT"],
+  // Storyboard Composer columns — one composite storyboard image per chunk
+  // (anime grid of 6–12 numbered panels) generated BEFORE video generation
+  // and used as a reference image for Kling-Omni-Pro.
+  ["video_chunks", "storyboard_status", "TEXT NOT NULL DEFAULT 'pending'"],
+  ["video_chunks", "storyboard_image_url", "TEXT"],
+  ["video_chunks", "storyboard_shot_count", "INTEGER"],
+  ["video_chunks", "storyboard_prompt", "TEXT"],
+  ["video_chunks", "storyboard_metadata_json", "TEXT"],
+  ["video_chunks", "selected_shots_json", "TEXT"],
+  ["video_chunks", "storyboard_generation_model", "TEXT"],
+  ["video_chunks", "storyboard_generation_time_ms", "INTEGER"],
+  ["video_chunks", "storyboard_error_message", "TEXT"],
   // provider_keys columns added during multi-key failover work — needed by
   // legacy DBs that pre-date the schema.sql additions.
   ["provider_keys", "cooldown_until", "TEXT"],
@@ -58,6 +70,7 @@ const defaultPricing: Array<[string, number, string]> = [
   ["character_generate", 8, "Generate one character with model sheet"],
   ["storyboard_generate", 10, "Generate full storyboard"],
   ["visualization_generate", 15, "Generate visualization pack"],
+  ["chunk_storyboard_generate", 4, "Generate composite storyboard sheet for one 10s chunk"],
   ["chunk_video_standard", 25, "Generate one 10-second video chunk (standard)"],
   ["chunk_video_reference", 30, "Generate one 10-second video chunk (reference-to-video)"],
   ["scene_image", 4, "Generate one scene board image"],

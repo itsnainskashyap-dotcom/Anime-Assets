@@ -65,11 +65,13 @@ async function downloadAndStore(url: string, opts: {
  * of holding multiple multi-MB base64 strings in flight), cache encoded
  * results in a small TTL+LRU map keyed by URL.
  */
+interface RefEntry { image: string; mime_type: string }
+
 const REF_CACHE_MAX = 64;
 const REF_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const refCache = new Map<string, { b64: string; expiresAt: number }>();
+const refCache = new Map<string, { entry: RefEntry; expiresAt: number }>();
 
-function refCacheGet(url: string): string | undefined {
+function refCacheGet(url: string): RefEntry | undefined {
   const hit = refCache.get(url);
   if (!hit) return undefined;
   if (hit.expiresAt < Date.now()) {
@@ -79,23 +81,34 @@ function refCacheGet(url: string): string | undefined {
   // LRU touch: re-insert to mark as most recent
   refCache.delete(url);
   refCache.set(url, hit);
-  return hit.b64;
+  return hit.entry;
 }
 
-function refCacheSet(url: string, b64: string): void {
+function refCacheSet(url: string, entry: RefEntry): void {
   if (refCache.size >= REF_CACHE_MAX) {
     const oldestKey = refCache.keys().next().value;
     if (oldestKey !== undefined) refCache.delete(oldestKey);
   }
-  refCache.set(url, { b64, expiresAt: Date.now() + REF_CACHE_TTL_MS });
+  refCache.set(url, { entry, expiresAt: Date.now() + REF_CACHE_TTL_MS });
 }
 
-async function buildReferenceImages(urls: string[]): Promise<Array<{ image: string }>> {
-  const out: Array<{ image: string }> = [];
+/** Infer a safe image MIME type from a Content-Type header or URL extension. */
+function inferMimeType(headerCT: string | null, url: string): string {
+  const ct = (headerCT || "").split(";")[0].trim().toLowerCase();
+  if (ct.startsWith("image/")) return ct;
+  const lower = url.toLowerCase().split("?")[0];
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "image/png";
+}
+
+async function buildReferenceImages(urls: string[]): Promise<RefEntry[]> {
+  const out: RefEntry[] = [];
   for (const url of urls) {
     const cached = refCacheGet(url);
     if (cached) {
-      out.push({ image: cached });
+      out.push(cached);
       continue;
     }
     try {
@@ -105,9 +118,12 @@ async function buildReferenceImages(urls: string[]): Promise<Array<{ image: stri
         continue;
       }
       const buf = Buffer.from(await res.arrayBuffer());
-      const b64 = buf.toString("base64");
-      refCacheSet(url, b64);
-      out.push({ image: b64 });
+      const entry: RefEntry = {
+        image: buf.toString("base64"),
+        mime_type: inferMimeType(res.headers.get("content-type"), url),
+      };
+      refCacheSet(url, entry);
+      out.push(entry);
     } catch (err) {
       logger.warn({ err, url }, "buildReferenceImages: skip ref (fetch failed)");
     }
