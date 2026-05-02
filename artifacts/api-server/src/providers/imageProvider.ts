@@ -8,11 +8,11 @@ import { safeFetch } from "../lib/safeFetch.js";
 
 export interface ImageRequest {
   prompt: string;
-  negativePrompt?: string;
-  referenceUrls?: string[];
-  aspectRatio?: string;
+  negativePrompt?: string;       // kept in interface for callers; ignored by Imagen 4
+  referenceUrls?: string[];      // kept in interface for callers; ignored by Imagen 4
+  aspectRatio?: string;          // "9:16", "16:9", "1:1", "3:4", "4:3" or named
   model?: string;
-  /** Pass num_inference_steps to the upstream API for higher quality output. */
+  /** Ignored by Imagen 4 (no inference steps parameter). */
   numInferenceSteps?: number;
   userId?: string;
   projectId?: string;
@@ -28,7 +28,7 @@ export interface ImageResponse {
   raw?: unknown;
 }
 
-interface FreepikImageTaskResponse {
+interface Imagen4TaskResponse {
   data?: {
     task_id?: string;
     status?: string;
@@ -36,8 +36,33 @@ interface FreepikImageTaskResponse {
   };
 }
 
-const IMAGE_ENDPOINT = process.env.MAGNIFIC_IMAGE_ENDPOINT || "/v1/ai/text-to-image/nano-banana-pro";
+// ── Endpoint ─────────────────────────────────────────────────────────────────
+// Default to Imagen 4 Ultra. Override via env for testing or fallback.
+const IMAGE_ENDPOINT =
+  process.env.MAGNIFIC_IMAGE_ENDPOINT || "/v1/ai/text-to-image/imagen4-ultra";
 
+// ── Aspect-ratio mapping ──────────────────────────────────────────────────────
+// Imagen 4 uses named strings; our internal code still passes the old "9:16"
+// shorthand, so normalise here before sending upstream.
+const ASPECT_RATIO_MAP: Record<string, string> = {
+  "9:16":  "social_story_9_16",
+  "16:9":  "widescreen_16_9",
+  "1:1":   "square_1_1",
+  "3:4":   "traditional_3_4",
+  "4:3":   "classic_4_3",
+  // pass-through if already named
+  "social_story_9_16": "social_story_9_16",
+  "widescreen_16_9":   "widescreen_16_9",
+  "square_1_1":        "square_1_1",
+  "traditional_3_4":   "traditional_3_4",
+  "classic_4_3":       "classic_4_3",
+};
+
+function toImagen4AspectRatio(ar: string): string {
+  return ASPECT_RATIO_MAP[ar] ?? "widescreen_16_9";
+}
+
+// ── Storage helper ────────────────────────────────────────────────────────────
 async function downloadAndStore(url: string, opts: {
   userId: string; projectId: string; assetType: string; filename?: string;
 }): Promise<{ url: string; sizeBytes: number }> {
@@ -55,84 +80,7 @@ async function downloadAndStore(url: string, opts: {
   return { url: saved.url, sizeBytes: saved.sizeBytes };
 }
 
-/**
- * Freepik nano-banana-pro expects each `reference_images` entry to be an
- * object containing a base64-encoded image (not a bare URL string), e.g.
- * `{ image: "<base64>" }`. Download each URL via safeFetch (which guards
- * against SSRF) and convert to base64.
- *
- * The same character/anchor URLs are reused across many image requests
- * (5 wave-2 calls per scene × 29 scenes ≈ 145 fetches of the same anchor
- * frame). To avoid redundant downloads/encoding (and the memory pressure
- * of holding multiple multi-MB base64 strings in flight), cache encoded
- * results in a small TTL+LRU map keyed by URL.
- */
-interface RefEntry { image: string; mime_type: string }
-
-const REF_CACHE_MAX = 64;
-const REF_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const refCache = new Map<string, { entry: RefEntry; expiresAt: number }>();
-
-function refCacheGet(url: string): RefEntry | undefined {
-  const hit = refCache.get(url);
-  if (!hit) return undefined;
-  if (hit.expiresAt < Date.now()) {
-    refCache.delete(url);
-    return undefined;
-  }
-  // LRU touch: re-insert to mark as most recent
-  refCache.delete(url);
-  refCache.set(url, hit);
-  return hit.entry;
-}
-
-function refCacheSet(url: string, entry: RefEntry): void {
-  if (refCache.size >= REF_CACHE_MAX) {
-    const oldestKey = refCache.keys().next().value;
-    if (oldestKey !== undefined) refCache.delete(oldestKey);
-  }
-  refCache.set(url, { entry, expiresAt: Date.now() + REF_CACHE_TTL_MS });
-}
-
-/** Infer a safe image MIME type from a Content-Type header or URL extension. */
-function inferMimeType(headerCT: string | null, url: string): string {
-  const ct = (headerCT || "").split(";")[0].trim().toLowerCase();
-  if (ct.startsWith("image/")) return ct;
-  const lower = url.toLowerCase().split("?")[0];
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".gif")) return "image/gif";
-  return "image/png";
-}
-
-async function buildReferenceImages(urls: string[]): Promise<RefEntry[]> {
-  const out: RefEntry[] = [];
-  for (const url of urls) {
-    const cached = refCacheGet(url);
-    if (cached) {
-      out.push(cached);
-      continue;
-    }
-    try {
-      const res = await safeFetch(url);
-      if (!res.ok) {
-        logger.warn({ url, status: res.status }, "buildReferenceImages: skip bad ref");
-        continue;
-      }
-      const buf = Buffer.from(await res.arrayBuffer());
-      const entry: RefEntry = {
-        image: buf.toString("base64"),
-        mime_type: inferMimeType(res.headers.get("content-type"), url),
-      };
-      refCacheSet(url, entry);
-      out.push(entry);
-    } catch (err) {
-      logger.warn({ err, url }, "buildReferenceImages: skip ref (fetch failed)");
-    }
-  }
-  return out;
-}
-
+// ── Main export ───────────────────────────────────────────────────────────────
 export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
   if (DEMO_MODE) {
     return {
@@ -143,19 +91,43 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
     };
   }
 
-  const aspect = req.aspectRatio || "16:9";
+  const aspect = toImagen4AspectRatio(req.aspectRatio || "16:9");
+
+  // Imagen 4 Ultra parameters
   const body: Record<string, unknown> = {
-    prompt: req.prompt,
-    aspect_ratio: aspect,
+    prompt:           req.prompt,
+    aspect_ratio:     aspect,
+    person_generation: "allow_adult",
+    safety_settings:  "block_only_high",
+    enhance_prompt:   true,
+    language:         "en",
+    output_options: {
+      mime_type:           "image/png",
+      compression_quality: 90,
+    },
   };
-  if (req.negativePrompt) body.negative_prompt = req.negativePrompt;
-  if (req.numInferenceSteps) body.num_inference_steps = req.numInferenceSteps;
-  if (req.referenceUrls && req.referenceUrls.length > 0) {
-    const refs = await buildReferenceImages(req.referenceUrls);
-    if (refs.length > 0) body.reference_images = refs;
+
+  // Seed for reproducibility when a numeric seed is derivable from filename
+  if (req.filename) {
+    const numMatch = req.filename.match(/\d+/);
+    if (numMatch) {
+      const seed = (parseInt(numMatch[0], 10) % 4_294_967_295) || 1;
+      body.seed = seed;
+    }
   }
 
-  const submit = await magnificFetch<FreepikImageTaskResponse>(IMAGE_ENDPOINT, {
+  // Note: Imagen 4 does NOT support reference_images, negative_prompt, or
+  // num_inference_steps. Those parameters are intentionally dropped here.
+  // Character consistency is maintained through the detailed text prompt.
+  if (req.negativePrompt) {
+    logger.debug("imageProvider: negative_prompt ignored (Imagen 4 not supported)");
+  }
+  if (req.referenceUrls?.length) {
+    logger.debug({ count: req.referenceUrls.length },
+      "imageProvider: referenceUrls ignored (Imagen 4 does not support reference_images)");
+  }
+
+  const submit = await magnificFetch<Imagen4TaskResponse>(IMAGE_ENDPOINT, {
     method: "POST",
     body,
   });
@@ -164,16 +136,15 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
   const taskId = submit.data?.task_id;
 
   if ((!imageUrls || imageUrls.length === 0) && taskId) {
-    // Poll for completion.
-    const final = await poll<FreepikImageTaskResponse>(
-      () => magnificFetch<FreepikImageTaskResponse>(`${IMAGE_ENDPOINT}/${taskId}`),
+    const final = await poll<Imagen4TaskResponse>(
+      () => magnificFetch<Imagen4TaskResponse>(`${IMAGE_ENDPOINT}/${taskId}`),
       (v) => {
         const s = (v.data?.status || "").toUpperCase();
         if (s === "COMPLETED") return true;
         if (s === "FAILED") throw new MagnificError("Image generation failed", 502, v);
         return Array.isArray(v.data?.generated) && v.data!.generated!.length > 0;
       },
-      { intervalMs: 2000, timeoutMs: 5 * 60 * 1000 },
+      { intervalMs: 3000, timeoutMs: 5 * 60 * 1000 },
     );
     imageUrls = final.data?.generated;
   }

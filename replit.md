@@ -37,7 +37,7 @@ The web artifact (`artifacts/animestudioai-web`) uses reusable UI primitives for
 - **Job Queue**: Persistent worker queue using SQL-level worker locking, heartbeats, and orphan-recovery. Features include cascading terminal failures to dependent tasks and idempotency keys for production pipelines.
 - **AI Integration (Providers)**:
     - **Text + Vision**: Anthropic Claude (`claude-sonnet-4-6`) for story bible, song lyrics, and chunk validation. Utilizes streaming for long responses and large `maxTokens` to avoid truncation.
-    - **Image/Video/Music/TTS/SFX/Lipsync/Transcription**: Magnific HTTP API (branded as "Animax Ultra") for various media generation. Supports configurable endpoints via environment variables. Image references are base64-encoded and cached.
+    - **Image/Video/Music/TTS/SFX/Lipsync/Transcription**: Magnific HTTP API (branded as "Animax Ultra") for various media generation. Supports configurable endpoints via environment variables. Image generation uses **Google Imagen 4 Ultra** (`/v1/ai/text-to-image/imagen4-ultra`) with aspect ratio normalisation, `person_generation: allow_adult`, `safety_settings: block_only_high`, and `enhance_prompt: true`. Reference images and inference steps are not supported by Imagen 4 and are silently ignored.
     - **Vision Fallback**: Prefers Gemini 2.5 Flash/Pro, falling back to Claude vision.
     - **Demo Mode**: `DEMO_MODE=true` short-circuits providers to deterministic stubs.
     - **SSRF Guard**: `lib/safeFetch.ts` enforces scheme, host allowlist, DNS resolution, and blocks private IPs.
