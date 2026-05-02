@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { User, Lock, Loader2, ShieldCheck, Sparkles, Image as ImageIcon } from "lucide-react";
+import { useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { User, Lock, Loader2, ShieldCheck, Sparkles, Image as ImageIcon, Upload, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
@@ -54,7 +54,11 @@ function PortraitCard({ url, label }: { url?: string | null; label: string }) {
 
 export default function CharacterStudioTab({ project }: { project: Project }) {
   const { api } = useAuth();
+  const qc = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const isFinalized = !!project.story_finalized_at;
 
   const { data: characters = [], isLoading, error } = useQuery<Character[]>({
     queryKey: ["projects", project.id, "characters"],
@@ -78,6 +82,42 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
     mutationFn: () => api(`/api/projects/${project.id}/characters/approve-lock`, { method: "POST" }),
   });
 
+  // V17 §7.2 — upload reference image; backend runs Gemini 2.5 Flash and
+  // creates a character with extracted appearance fields.
+  const uploadReference = useMutation<unknown, Error, File>({
+    mutationFn: async (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await api(`/api/projects/${project.id}/characters/upload-reference`, {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error((err as { error?: string }).error || "Upload failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setUploadError(null);
+      qc.invalidateQueries({ queryKey: ["projects", project.id, "characters"] });
+    },
+    onError: (e) => setUploadError(e.message),
+  });
+
+  const handleFile = (f: File | undefined): void => {
+    if (!f) return;
+    if (!/^image\/(png|jpe?g|webp|gif)$/.test(f.type)) {
+      setUploadError("Please upload a PNG, JPEG, WebP or GIF image.");
+      return;
+    }
+    if (f.size > 20 * 1024 * 1024) {
+      setUploadError("Image too large (max 20 MB).");
+      return;
+    }
+    uploadReference.mutate(f);
+  };
+
   const selected = characters.find(c => c.id === selectedId) ?? characters[0] ?? null;
   const appearance = parseAppearance(selected?.appearance_json);
   const allPortraitsDone = characters.length > 0 && characters.every(c => c.portrait_url);
@@ -98,17 +138,46 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
   if (characters.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4 text-center p-8">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          className="hidden"
+          onChange={(e) => handleFile(e.target.files?.[0])}
+        />
         <div className="w-16 h-16 rounded-full bg-card border border-border/50 flex items-center justify-center">
           <User className="w-8 h-8 text-muted-foreground/30" />
         </div>
         <div>
           <p className="font-semibold mb-1">Characters not yet generated</p>
-          <p className="text-sm text-muted-foreground">This happens automatically after the Story Bible completes.<br/>Or trigger it manually:</p>
+          <p className="text-sm text-muted-foreground">This happens automatically after the Story Bible completes.<br/>Or generate them, or upload a reference image to start from your own portrait.</p>
         </div>
-        <Button className="gap-2" onClick={() => generateCharacters.mutate()} disabled={generateCharacters.isPending}>
-          {generateCharacters.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-          Generate Characters
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button className="gap-2" onClick={() => generateCharacters.mutate()} disabled={generateCharacters.isPending || !isFinalized}>
+            {generateCharacters.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            Generate Characters
+          </Button>
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadReference.isPending}
+          >
+            {uploadReference.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            Upload Reference
+          </Button>
+        </div>
+        {!isFinalized && (
+          <p className="text-xs text-amber-300/80 max-w-sm">
+            Story finalization is recommended before generating canon characters,
+            but you can upload a reference image at any time.
+          </p>
+        )}
+        {uploadError && (
+          <div className="text-xs text-destructive flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5" /> {uploadError}
+          </div>
+        )}
       </div>
     );
   }
@@ -116,6 +185,13 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
   return (
     <div className="h-full flex gap-0">
       {/* Sidebar */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        onChange={(e) => handleFile(e.target.files?.[0])}
+      />
       <div className="w-[280px] border-r border-border/50 bg-card/30 flex flex-col">
         <div className="p-4 border-b border-border/50 flex items-center justify-between">
           <div>
@@ -126,6 +202,26 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
             <div className="flex items-center gap-1.5 text-xs text-amber-400">
               <Loader2 className="w-3 h-3 animate-spin" />
               Generating
+            </div>
+          )}
+        </div>
+        <div className="px-3 pt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full gap-2 h-8"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadReference.isPending}
+            title="Upload a reference image — Vision Analyzer will extract appearance fields"
+          >
+            {uploadReference.isPending
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Upload className="w-3.5 h-3.5" />}
+            Upload Reference
+          </Button>
+          {uploadError && (
+            <div className="text-[11px] text-destructive flex items-center gap-1.5 mt-2 px-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" /> {uploadError}
             </div>
           )}
         </div>

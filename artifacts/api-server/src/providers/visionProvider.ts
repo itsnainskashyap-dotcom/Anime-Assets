@@ -106,6 +106,130 @@ async function validateWithClaude(req: VisionRequest): Promise<VisionResponse> {
   };
 }
 
+/* -------------------------------------------------------------------------- */
+/*                       CHARACTER REFERENCE ANALYZER                          */
+/* V17 §7.2 — when a user uploads a reference image in the Character Studio    */
+/* the system uses Gemini 2.5 Flash to extract structured appearance fields    */
+/* so the downstream character-generation pipeline can build a consistent      */
+/* design from the reference.                                                  */
+/* -------------------------------------------------------------------------- */
+
+export interface CharacterAnalysis {
+  appearance: string;
+  faceStructure?: string;
+  hairColor?: string;
+  hairStyle?: string;
+  skinTone?: string;
+  outfit?: string;
+  ageVibe?: string;
+  mood?: string;
+  accessories?: string;
+  energy?: string;
+  summary: string;
+  modelUsed: string;
+}
+
+const CHAR_ANALYZER_PROMPT =
+  "You are a senior anime character designer reviewing a reference image. " +
+  "Extract structured visual cues. Be concise. Return STRICT JSON with these keys: " +
+  "appearance (one paragraph head-to-toe description), faceStructure, hairColor, hairStyle, " +
+  "skinTone, outfit, ageVibe (e.g. 'late teens', 'young adult'), mood, accessories, energy " +
+  "(one short phrase summarizing personality vibe), summary (one sentence overall hook).";
+
+function synthDemoAnalysis(imageUrl: string): CharacterAnalysis {
+  return {
+    appearance:
+      "Slender protagonist with sharp determined features, layered jacket and quiet confidence.",
+    faceStructure: "oval, defined jawline",
+    hairColor: "midnight black",
+    hairStyle: "side-swept layered",
+    skinTone: "warm fair",
+    outfit: "fitted dark jacket over a hooded undershirt",
+    ageVibe: "late teens",
+    mood: "focused / restrained",
+    accessories: "single ear cuff",
+    energy: "quietly intense",
+    summary: `Demo analysis of ${imageUrl.slice(0, 80)} — turn off DEMO_MODE for real Gemini extraction.`,
+    modelUsed: "demo",
+  };
+}
+
+async function analyzeWithGemini(imageUrl: string): Promise<CharacterAnalysis | null> {
+  const client = tryGemini();
+  if (!client) return null;
+  try {
+    const img = await fetchImageAsBase64(imageUrl);
+    if (!img) return null;
+    const model = client.getGenerativeModel({
+      model: GEMINI_FLASH,
+      generationConfig: { responseMimeType: "application/json" },
+    });
+    const result = await model.generateContent([
+      { text: CHAR_ANALYZER_PROMPT },
+      { inlineData: { data: img.data, mimeType: img.mime } },
+    ]);
+    const text = result.response.text();
+    const data = JSON.parse(text) as Partial<CharacterAnalysis>;
+    return {
+      appearance: data.appearance ?? "Reference character (appearance not extracted).",
+      faceStructure: data.faceStructure,
+      hairColor: data.hairColor,
+      hairStyle: data.hairStyle,
+      skinTone: data.skinTone,
+      outfit: data.outfit,
+      ageVibe: data.ageVibe,
+      mood: data.mood,
+      accessories: data.accessories,
+      energy: data.energy,
+      summary: data.summary ?? "Character reference analyzed.",
+      modelUsed: GEMINI_FLASH,
+    };
+  } catch (err) {
+    logger.warn({ err }, "Vision: character reference analysis (Gemini) failed");
+    return null;
+  }
+}
+
+async function analyzeWithClaude(imageUrl: string): Promise<CharacterAnalysis> {
+  try {
+    const { data } = await generateJson<Partial<CharacterAnalysis>>({
+      systemPrompt: CHAR_ANALYZER_PROMPT,
+      userPrompt: "Analyze the supplied reference image and respond as JSON.",
+      imageUrls: [imageUrl],
+      maxTokens: 1024,
+    });
+    return {
+      appearance: data.appearance ?? "Reference character.",
+      faceStructure: data.faceStructure,
+      hairColor: data.hairColor,
+      hairStyle: data.hairStyle,
+      skinTone: data.skinTone,
+      outfit: data.outfit,
+      ageVibe: data.ageVibe,
+      mood: data.mood,
+      accessories: data.accessories,
+      energy: data.energy,
+      summary: data.summary ?? "Character reference analyzed (Claude fallback).",
+      modelUsed: "claude-sonnet-4-6",
+    };
+  } catch (err) {
+    logger.warn({ err }, "Vision: character reference analysis (Claude) failed");
+    return {
+      appearance: "Reference character (analysis unavailable; using image as direct portrait).",
+      summary: "Vision analysis failed — image will be used as a direct portrait reference.",
+      modelUsed: "fallback",
+    };
+  }
+}
+
+/** V17 §7.2 — analyze a user-uploaded character reference image. */
+export async function analyzeCharacterReference(imageUrl: string): Promise<CharacterAnalysis> {
+  if (DEMO_MODE) return synthDemoAnalysis(imageUrl);
+  const gem = await analyzeWithGemini(imageUrl);
+  if (gem) return gem;
+  return analyzeWithClaude(imageUrl);
+}
+
 /**
  * Visual validation/QC. Tries Gemini 2.5 (Flash by default, Pro when
  * highAccuracy=true) when GOOGLE_API_KEY is configured; otherwise falls

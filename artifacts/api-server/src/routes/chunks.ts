@@ -124,6 +124,59 @@ router.post(
   },
 );
 
+/**
+ * V17 §9.4 — regenerate the storyboard sheet for a single chunk. The
+ * Storyboard Composer worker uses the same shot plan + scene intent +
+ * character/environment locks the video prompt will use, keeping the two
+ * artifacts aligned per the spec.
+ */
+router.post("/:id/storyboard/regenerate", requireAuth, generationLimiter, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const c = loadChunkOwned(req.params.id as string, u.sub);
+  if (!c) {
+    res.status(404).json({ error: "Chunk not found" });
+    return;
+  }
+  // Stash the previous status so we can revert if enqueue fails — otherwise
+  // the chunk would be left stuck in 'queued' with no worker to drain it.
+  // ChunkRow doesn't surface storyboard_status; fetch it directly.
+  const prev = db
+    .prepare<[string], { storyboard_status: string | null }>(
+      "SELECT storyboard_status FROM video_chunks WHERE id = ?",
+    )
+    .get(c.id);
+  const previousStatus = prev?.storyboard_status ?? null;
+  db.prepare(
+    "UPDATE video_chunks SET storyboard_status='queued', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+  ).run(c.id);
+  let task;
+  try {
+    task = enqueueTask({
+      type: "chunk_storyboard_generate",
+      stage: "chunk_storyboard_generate",
+      projectId: c.project_id,
+      userId: u.sub,
+      chunkId: c.id,
+      sceneId: c.scene_id,
+      payload: { chunkId: c.id, regenerate: true },
+    });
+  } catch (err) {
+    db.prepare(
+      "UPDATE video_chunks SET storyboard_status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+    ).run(previousStatus, c.id);
+    res.status(500).json({ error: `Failed to enqueue: ${(err as Error).message}` });
+    return;
+  }
+  recordPlaygroundEvent({
+    projectId: c.project_id,
+    eventType: "storyboard_queued",
+    agent: "Storyboard Composer",
+    message: `Storyboard sheet regenerate queued for Chunk ${c.chunk_number}.`,
+    payload: { chunkId: c.id, jobId: task.id },
+  });
+  res.status(202).json({ ok: true, jobId: task.id, status: "queued" });
+});
+
 router.post("/:id/reference-video", requireAuth, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
   const c = loadChunkOwned((req.params.id as string), u.sub);

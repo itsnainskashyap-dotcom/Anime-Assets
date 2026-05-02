@@ -154,6 +154,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
   const [status, setStatus] = useState<"connecting" | "connected" | "reconnecting" | "error">("connecting");
   const [selectedStage, setSelectedStage] = useState<string>("story");
   const [chatInput, setChatInput] = useState("");
+  const [chatOpen, setChatOpen] = useState(false); // mobile bottom-sheet toggle
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   /* ------------------------------ SSE pipeline ----------------------------- */
@@ -311,10 +312,39 @@ export default function PlaygroundTab({ project }: { project: Project }) {
         </div>
       </div>
 
+      {/* MOBILE — horizontal stage rail (hidden on md+) */}
+      <div className="md:hidden border-b border-border/50 bg-card/20 overflow-x-auto scrollbar-none flex gap-1.5 px-3 py-2 shrink-0">
+        {STAGES.map((s) => {
+          const st = stageStates[s.id];
+          const isActive = selectedStage === s.id;
+          const Icon = s.icon;
+          const dotColor =
+            st.status === "complete" ? "bg-emerald-400"
+            : st.status === "active" ? "bg-primary animate-pulse"
+            : st.status === "error" ? "bg-destructive"
+            : "bg-muted-foreground/30";
+          return (
+            <button
+              key={s.id}
+              onClick={() => setSelectedStage(s.id)}
+              className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs whitespace-nowrap transition-all ${
+                isActive
+                  ? "bg-primary/10 border-primary/40 text-foreground"
+                  : "bg-card/40 border-border/40 text-muted-foreground"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+              <Icon className="w-3 h-3" />
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex-1 flex min-h-0">
 
-        {/* LEFT — STAGE TIMELINE */}
-        <aside className="w-[280px] shrink-0 border-r border-border/50 bg-card/20 flex flex-col">
+        {/* LEFT — STAGE TIMELINE (desktop only) */}
+        <aside className="hidden md:flex w-[280px] shrink-0 border-r border-border/50 bg-card/20 flex-col">
           <div className="p-4 border-b border-border/40">
             <h3 className="text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground flex items-center gap-1.5">
               <RadioTower className="w-3 h-3" /> Production Stages
@@ -447,8 +477,16 @@ export default function PlaygroundTab({ project }: { project: Project }) {
           </AnimatePresence>
         </main>
 
-        {/* RIGHT — PERSISTENT CHAT PANEL */}
-        <aside className="w-[380px] shrink-0 border-l border-border/50 bg-gradient-to-b from-card/40 to-card/20 backdrop-blur flex flex-col">
+        {/* RIGHT — PERSISTENT CHAT PANEL (desktop) / BOTTOM SHEET (mobile) */}
+        <aside
+          className={`
+            border-l border-border/50 bg-gradient-to-b from-card/40 to-card/20 backdrop-blur flex flex-col
+            md:w-[380px] md:shrink-0 md:static md:translate-y-0 md:flex
+            fixed inset-x-0 bottom-0 z-40 max-h-[80vh] h-[70vh] rounded-t-2xl border-t md:border-t-0 md:rounded-none
+            transition-transform duration-300 ease-out
+            ${chatOpen ? "translate-y-0" : "translate-y-full md:translate-y-0"}
+          `}
+        >
           <div className="p-4 border-b border-border/40 shrink-0">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold flex items-center gap-2">
@@ -527,6 +565,26 @@ export default function PlaygroundTab({ project }: { project: Project }) {
           </div>
         </aside>
       </div>
+
+      {/* MOBILE — backdrop & floating chat toggle */}
+      {chatOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-30 bg-black/40 backdrop-blur-sm"
+          onClick={() => setChatOpen(false)}
+        />
+      )}
+      <button
+        onClick={() => setChatOpen((v) => !v)}
+        className="md:hidden fixed bottom-14 right-4 z-50 h-12 w-12 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center"
+        aria-label="Toggle Studio Chat"
+      >
+        <MessageSquare className="w-5 h-5" />
+        {chatEvents.length > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-destructive text-[10px] font-bold flex items-center justify-center px-1">
+            {chatEvents.length > 99 ? "99+" : chatEvents.length}
+          </span>
+        )}
+      </button>
 
       {/* BOTTOM RAIL */}
       <div className="h-9 shrink-0 border-t border-border/50 bg-card/40 backdrop-blur flex items-center px-4 gap-4 text-[10px] uppercase tracking-wider text-muted-foreground">

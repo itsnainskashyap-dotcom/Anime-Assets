@@ -1,13 +1,17 @@
+import fs from "node:fs";
 import { Router, type IRouter, type Response } from "express";
 import { v4 as uuid } from "uuid";
 import db from "../db/index.js";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { generationLimiter } from "../middleware/rateLimit.js";
+import { singleUpload, IMAGE_MIME } from "../middleware/upload.js";
 import { enqueueTask, enqueueStageOnce, findInflightStage } from "../services/queue.js";
 import { recordPlaygroundEvent } from "../services/playgroundEvents.js";
 import { loadMemory } from "../services/productionMemory.js";
 import { approveLock, assertNotLocked } from "../services/characterConsistencyLock.js";
 import { debitCredits, getPrice } from "../services/credits.js";
+import { saveBuffer } from "../providers/storageProvider.js";
+import { analyzeCharacterReference } from "../providers/visionProvider.js";
 import { attachSseClient } from "../lib/sse.js";
 
 const router: IRouter = Router();
@@ -350,6 +354,129 @@ router.post("/:id/characters/approve-lock", requireAuth, (req, res) => {
   recordPlaygroundEvent({ projectId: p.id, eventType: "character_locked", message: `Character ${characterId} locked` });
   res.json({ ok: true, lock });
 });
+
+/**
+ * V17 §7.2 — upload a character reference image. Saves the file, runs Gemini
+ * 2.5 Flash vision analysis to extract structured appearance fields, inserts
+ * a new character row pre-populated from the analysis, and emits Vision
+ * Analyzer + Character Director playground events.
+ *
+ * Multipart form: field `file` (image), optional `name`, optional `role`.
+ */
+router.post(
+  "/:id/characters/upload-reference",
+  requireAuth,
+  generationLimiter,
+  singleUpload({ allowedMime: IMAGE_MIME, maxBytes: 20 * 1024 * 1024, field: "file" }),
+  async (req, res) => {
+    const u = (req as AuthenticatedRequest).user!;
+    const p = loadProject(req.params.id as string, u.sub);
+    if (!p) return notFound(res);
+    const file = (req as unknown as { file?: Express.Multer.File }).file;
+    if (!file) {
+      res.status(400).json({ error: "Missing file field" });
+      return;
+    }
+    const body = (req.body || {}) as { name?: string; role?: string };
+
+    // 1. Persist the upload to storage so vision analyzer + future render
+    //    pipeline can fetch by URL.
+    const buf = await fs.promises.readFile(file.path);
+    const saved = await saveBuffer(buf, {
+      userId: u.sub,
+      projectId: p.id,
+      assetType: "character_reference",
+      filename: file.filename,
+      contentType: file.mimetype,
+    });
+    await fs.promises.unlink(file.path).catch(() => undefined);
+
+    // 2. Build the absolute URL the vision provider can fetch. The storage
+    //    URL is server-relative; PUBLIC_BASE_URL is set in dev/prod.
+    const base = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+    const fetchableUrl = base ? `${base}${saved.url}` : saved.url;
+
+    // 3. Inform the user immediately — analysis happens in-line but the
+    //    upload itself is the user-visible event.
+    recordPlaygroundEvent({
+      projectId: p.id,
+      eventType: "character_uploaded",
+      agent: "Character Director",
+      message: `Reference image uploaded${body.name ? ` for ${body.name}` : ""}. Vision Analyzer is extracting design cues.`,
+      payload: { url: saved.url, sizeBytes: saved.sizeBytes },
+    });
+
+    // 4. Run Gemini 2.5 Flash analysis. Errors are non-fatal — we still
+    //    create a character row with the raw image as portrait so the user
+    //    can manually edit fields if vision fails.
+    let analysis;
+    try {
+      analysis = await analyzeCharacterReference(fetchableUrl);
+    } catch (err) {
+      // Defensive — analyzeCharacterReference already swallows internal
+      // errors, but belt-and-braces.
+      analysis = {
+        appearance: "Reference character (analysis unavailable).",
+        summary: `Analyzer error: ${(err as Error).message}`,
+        modelUsed: "fallback",
+      } as Awaited<ReturnType<typeof analyzeCharacterReference>>;
+    }
+
+    // 5. Persist character row.
+    const characterId = uuid();
+    const appearanceJson = JSON.stringify({
+      faceStructure: analysis.faceStructure,
+      hairColor: analysis.hairColor,
+      hairStyle: analysis.hairStyle,
+      skinTone: analysis.skinTone,
+      outfit: analysis.outfit,
+      ageVibe: analysis.ageVibe,
+      mood: analysis.mood,
+      accessories: analysis.accessories,
+      energy: analysis.energy,
+      source: "uploaded_reference",
+      referenceUrl: saved.url,
+      analyzerModel: analysis.modelUsed,
+    });
+    db.prepare(
+      `INSERT INTO characters (id, project_id, name, role, description, appearance_json, portrait_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      characterId,
+      p.id,
+      body.name || "Reference Character",
+      body.role || "Protagonist",
+      analysis.appearance,
+      appearanceJson,
+      saved.url,
+    );
+
+    recordPlaygroundEvent({
+      projectId: p.id,
+      eventType: "vision_analyzed",
+      agent: "Vision Analyzer",
+      message: `Analyzed uploaded portrait via ${analysis.modelUsed}. ${analysis.summary}`,
+      payload: {
+        characterId,
+        analyzer: analysis.modelUsed,
+        extracted: {
+          hair: analysis.hairColor && analysis.hairStyle
+            ? `${analysis.hairColor} ${analysis.hairStyle}`
+            : analysis.hairColor || analysis.hairStyle,
+          age: analysis.ageVibe,
+          outfit: analysis.outfit,
+        },
+      },
+    });
+
+    res.status(201).json({
+      ok: true,
+      characterId,
+      referenceUrl: saved.url,
+      analysis,
+    });
+  },
+);
 
 router.post("/:id/storyboard/generate", requireAuth, generationLimiter, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
