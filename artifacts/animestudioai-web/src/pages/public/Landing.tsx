@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { ChevronRight, ArrowRight, Github, Twitter } from "lucide-react";
+import { BackgroundVideo } from "@/components/media/BackgroundVideo";
 import {
   PiPlayCircleDuotone,
   PiMagicWandDuotone,
@@ -13,7 +14,6 @@ import {
 } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { AnimePoster } from "@/components/ui/anime-poster";
-import heroBg from "@assets/generated_images/hero_landing.png";
 import logoMark from "@assets/generated_images/logo_mark.png";
 import featCharacter from "@assets/generated_images/feature_character.png";
 import featStoryboard from "@assets/generated_images/feature_storyboard.png";
@@ -110,35 +110,34 @@ export default function Landing() {
       </nav>
 
       {/* Hero */}
-      <section className="relative pt-32 pb-24 lg:pt-40 lg:pb-36 overflow-hidden min-h-[92vh] flex items-center">
-        <div className="absolute inset-0 z-0">
-          <motion.img
-            src={heroBg}
-            alt=""
-            className="w-full h-full object-cover object-center"
-            initial={{ scale: 1.12, opacity: 0 }}
-            animate={{ scale: 1, opacity: 0.55 }}
-            transition={{ duration: 2.5, ease: "easeOut" as const }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-background/40 via-background/70 to-background z-10" />
-          <div className="absolute inset-0 bg-gradient-to-r from-background/60 via-transparent to-background/60 z-10" />
-          {/* Animated grid noise */}
-          <div className="absolute inset-0 z-10 opacity-[0.04] mix-blend-screen" style={{
-            backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)",
-            backgroundSize: "32px 32px",
-          }} />
-          {/* Floating glow orbs */}
-          <motion.div
-            className="absolute top-1/4 left-[12%] w-72 h-72 rounded-full bg-primary/20 blur-3xl"
-            animate={{ y: [0, 24, 0], x: [0, -16, 0] }}
-            transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-          />
-          <motion.div
-            className="absolute bottom-1/4 right-[10%] w-96 h-96 rounded-full bg-purple-500/15 blur-3xl"
-            animate={{ y: [0, -20, 0], x: [0, 20, 0] }}
-            transition={{ duration: 14, repeat: Infinity, ease: "easeInOut" }}
-          />
-        </div>
+      <section className="relative pt-32 pb-24 lg:pt-40 lg:pb-36 overflow-hidden min-h-[92vh] flex items-center bg-[#05030a]">
+        {/* Background video with cinematic overlays */}
+        <BackgroundVideo
+          src={`${import.meta.env.BASE_URL}assets/videos/landing-hero-bg.mp4`}
+          poster={`${import.meta.env.BASE_URL}assets/posters/landing-hero-poster.webp`}
+          className="absolute inset-0 h-full w-full object-cover object-center"
+          overlay="cinematic"
+          mobileFallback
+        />
+        {/* Edge gradient fades — keep text readable and blend into page */}
+        <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-transparent to-background z-10 pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-background/50 via-transparent to-background/50 z-10 pointer-events-none" />
+        {/* Subtle grid texture */}
+        <div className="absolute inset-0 z-10 opacity-[0.035] mix-blend-screen pointer-events-none" style={{
+          backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)",
+          backgroundSize: "32px 32px",
+        }} />
+        {/* Floating glow orbs */}
+        <motion.div
+          className="absolute top-1/4 left-[12%] w-72 h-72 rounded-full bg-primary/20 blur-3xl z-10 pointer-events-none"
+          animate={{ y: [0, 24, 0], x: [0, -16, 0] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          className="absolute bottom-1/4 right-[10%] w-96 h-96 rounded-full bg-purple-500/15 blur-3xl z-10 pointer-events-none"
+          animate={{ y: [0, -20, 0], x: [0, 20, 0] }}
+          transition={{ duration: 14, repeat: Infinity, ease: "easeInOut" }}
+        />
 
         <div className="container relative z-20 mx-auto px-4">
           <div className="max-w-4xl mx-auto text-center">

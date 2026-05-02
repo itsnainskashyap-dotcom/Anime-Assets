@@ -1,0 +1,81 @@
+Add my uploaded 720p 1MB video as the landing page hero background video.
+
+Requirements:
+1. Use the video only on the landing page hero section background.
+2. Place the video file in:
+   public/assets/videos/landing-hero-bg.mp4
+3. Create a poster image from the first good frame and save it as:
+   public/assets/posters/landing-hero-poster.webp
+4. The video must autoplay, muted, loop, and play inline on mobile.
+5. Use `preload="metadata"` so the page does not become slow.
+6. Add a dark cinematic overlay above the video so text stays readable.
+7. Add subtle violet/magenta/cyan gradient glow overlay matching AnimeStudioAI branding.
+8. The video must cover the full hero area using `object-fit: cover`.
+9. On mobile or low-power mode, use poster image fallback if autoplay fails.
+10. Do not load this video on other pages.
+11. Do not put the video in React state or load it through JS unnecessarily.
+12. Keep landing page fast, smooth, and cinematic.
+
+Implementation:
+- Create a reusable component:
+  `client/components/media/BackgroundVideo.tsx`
+
+Component should accept:
+- `src`
+- `poster`
+- `className`
+- `overlay`
+- `mobileFallback`
+
+Use it in the landing page hero section.
+
+Example JSX structure:
+
+<BackgroundVideo
+  src="/assets/videos/landing-hero-bg.mp4"
+  poster="/assets/posters/landing-hero-poster.webp"
+  className="absolute inset-0 h-full w-full object-cover"
+  overlay="cinematic"
+/>
+
+The hero section layout should be:
+
+<section className="relative min-h-screen overflow-hidden bg-[#05030a]">
+  <BackgroundVideo ... />
+
+  <div className="absolute inset-0 bg-black/55" />
+  <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(217,70,239,0.22),transparent_38%),radial-gradient(circle_at_70%_70%,rgba(34,211,238,0.12),transparent_35%)]" />
+
+  <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl items-center px-6">
+    hero content here
+  </div>
+</section>
+
+Video CSS/behavior:
+- autoplay
+- muted
+- loop
+- playsInline
+- preload="metadata"
+- disable picture-in-picture if possible
+- aria-hidden="true"
+- tabIndex={-1}
+
+Also add a small CSS rule:
+@media (prefers-reduced-motion: reduce) {
+  .landing-bg-video {
+    display: none;
+  }
+  .landing-bg-poster {
+    display: block;
+  }
+}
+
+Important:
+- The video should never block first paint.
+- Text, buttons, navbar, and hero content must remain readable.
+- Keep the hero premium, cinematic, and smooth.
+- Add fallback poster background behind the video.
+- Add `pointer-events-none` on the video.
+- Do not show video controls.
+- Do not show loading spinner for the background video.
