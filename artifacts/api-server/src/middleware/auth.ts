@@ -29,6 +29,9 @@ export const requireAuth: RequestHandler = (req, res, next) => {
 };
 
 export function requireAdmin(...allowedRoles: string[]): RequestHandler {
+  const getAdminStmt = db.prepare<[string], { is_admin: number }>(
+    "SELECT is_admin FROM users WHERE id = ?",
+  );
   const getRoleStmt = db.prepare<[string], { role_name: string }>(
     "SELECT role_name FROM admin_user_roles WHERE user_id = ?",
   );
@@ -38,7 +41,10 @@ export function requireAdmin(...allowedRoles: string[]): RequestHandler {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    if (!u.isAdmin) {
+    // Always read admin status from DB so permission changes take effect immediately
+    const dbUser = getAdminStmt.get(u.sub);
+    const isAdmin = dbUser?.is_admin === 1;
+    if (!isAdmin) {
       res.status(403).json({ error: "Forbidden", message: "Admin access required" });
       return;
     }

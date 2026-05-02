@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
-import { User, Lock, Loader2, ShieldCheck, Image as ImageIcon, Upload, AlertTriangle } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { User, Lock, Loader2, ShieldCheck, Image as ImageIcon, Upload, AlertTriangle, Sparkles } from "lucide-react";
 import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,42 +36,107 @@ function parseAppearance(raw: string | undefined): Appearance {
   try { return JSON.parse(raw) as Appearance; } catch { return {}; }
 }
 
-function PortraitCard({ url, label, isReference, portraitReady, tall }: {
+function ShimmerCard() {
+  return (
+    <div className="relative w-full h-full overflow-hidden bg-gradient-to-b from-muted/20 to-muted/5">
+      {/* Animated shimmer sweep */}
+      <motion.div
+        className="absolute inset-0 -translate-x-full"
+        style={{
+          background: "linear-gradient(105deg, transparent 40%, rgba(139,92,246,0.08) 50%, rgba(168,85,247,0.12) 55%, rgba(139,92,246,0.06) 60%, transparent 70%)",
+        }}
+        animate={{ x: ["-100%", "200%"] }}
+        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut", repeatDelay: 0.3 }}
+      />
+      {/* Pulsing icon */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+        <motion.div
+          className="relative"
+          animate={{ scale: [1, 1.08, 1] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-primary/50" />
+          </div>
+          <motion.div
+            className="absolute -inset-1 rounded-xl border border-primary/20"
+            animate={{ opacity: [0.4, 0, 0.4], scale: [1, 1.15, 1] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
+          />
+        </motion.div>
+        <div className="text-center space-y-1">
+          <p className="text-[11px] font-medium text-primary/60">Generating</p>
+          <div className="flex items-center gap-1 justify-center">
+            {[0, 0.2, 0.4].map((delay) => (
+              <motion.div
+                key={delay}
+                className="w-1 h-1 rounded-full bg-primary/40"
+                animate={{ opacity: [0.2, 1, 0.2], y: [0, -3, 0] }}
+                transition={{ duration: 0.8, repeat: Infinity, delay }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PortraitCard({ url, label, isReference, portraitReady, isLarge }: {
   url?: string | null;
   label: string;
   isReference?: boolean;
   portraitReady?: boolean;
-  tall?: boolean;
+  isLarge?: boolean;
 }) {
   const generating = !url && (isReference || portraitReady);
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className={`${tall ? "aspect-[9/16]" : "aspect-[9/16]"} rounded-xl border border-border/50 bg-card/50 overflow-hidden flex items-center justify-center relative`}>
-        {url ? (
-          <motion.img
-            key={url}
-            src={url}
-            alt={label}
-            className="w-full h-full object-cover"
-            initial={{ opacity: 0, scale: 1.04 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.4 }}
-          />
-        ) : generating ? (
-          <div className="flex flex-col items-center gap-2 text-muted-foreground/50">
-            <div className="relative">
-              <ImageIcon className="w-6 h-6 opacity-40" />
-              <Loader2 className="w-4 h-4 animate-spin absolute -bottom-1.5 -right-1.5 text-primary/70" />
-            </div>
-            <span className="text-[10px] text-muted-foreground/50">Generating…</span>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-2 text-muted-foreground/20">
-            <ImageIcon className="w-6 h-6" />
+    <div className="flex flex-col gap-2">
+      <div className={`${isLarge ? "aspect-[9/16]" : "aspect-[9/16]"} rounded-xl border overflow-hidden relative group ${
+        url ? "border-border/60 shadow-lg shadow-black/20" : generating ? "border-primary/20 bg-card/30" : "border-border/30 bg-card/20"
+      }`}>
+        <AnimatePresence mode="wait">
+          {url ? (
+            <motion.img
+              key={url}
+              src={url}
+              alt={label}
+              className="w-full h-full object-cover"
+              initial={{ opacity: 0, scale: 1.06 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
+            />
+          ) : generating ? (
+            <motion.div
+              key="shimmer"
+              className="absolute inset-0"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              <ShimmerCard />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="empty"
+              className="absolute inset-0 flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+            >
+              <ImageIcon className="w-6 h-6 text-muted-foreground/15" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {/* Overlay label on hover for generated images */}
+        {url && (
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity p-3">
+            <p className="text-xs text-white/80 font-medium text-center">{label}</p>
           </div>
         )}
       </div>
-      <p className="text-xs text-center text-muted-foreground">{label}</p>
+      <p className="text-xs text-center font-medium text-muted-foreground/70">{label}</p>
     </div>
   );
 }
@@ -324,11 +389,17 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
             </div>
 
             {/* Full Body Reference + 3 angle views */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PortraitCard url={selected.portrait_url}                  label="Full Body Ref" isReference />
-              <PortraitCard url={selected.model_sheet_front_url}         label="Front View"    portraitReady={!!selected.portrait_url} />
-              <PortraitCard url={selected.model_sheet_three_quarter_url} label="¾ View"        portraitReady={!!selected.portrait_url} />
-              <PortraitCard url={selected.model_sheet_back_url}          label="Back View"     portraitReady={!!selected.portrait_url} />
+            <div className="grid grid-cols-4 gap-3">
+              {/* Full body ref — spans 2 columns, taller */}
+              <div className="col-span-2">
+                <PortraitCard url={selected.portrait_url} label="Full Body Ref" isReference isLarge />
+              </div>
+              {/* 3 angle views stacked vertically in remaining 2 columns */}
+              <div className="col-span-2 grid grid-cols-3 gap-3 content-start">
+                <PortraitCard url={selected.model_sheet_front_url}         label="Front"  portraitReady={!!selected.portrait_url} />
+                <PortraitCard url={selected.model_sheet_three_quarter_url} label="¾ View" portraitReady={!!selected.portrait_url} />
+                <PortraitCard url={selected.model_sheet_back_url}          label="Back"   portraitReady={!!selected.portrait_url} />
+              </div>
             </div>
 
             {/* Description + Appearance */}

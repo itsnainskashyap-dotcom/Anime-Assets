@@ -39,9 +39,9 @@ const queryClient = new QueryClient();
 type RouteProps = { component: React.ComponentType; adminOnly?: boolean };
 
 function ProtectedRoute({ component: Component, adminOnly = false }: RouteProps) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, isFetching } = useAuth();
 
-  if (isLoading) {
+  if (isLoading || (adminOnly && isFetching)) {
     return <div className="min-h-screen flex items-center justify-center bg-background"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>;
   }
 

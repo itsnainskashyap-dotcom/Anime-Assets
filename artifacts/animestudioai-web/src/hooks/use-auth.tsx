@@ -10,6 +10,7 @@ export type { User } from "@/types/api";
 type AuthContextType = {
   user: User | null;
   isLoading: boolean;
+  isFetching: boolean;
   token: string | null;
   login: (data: LoginInput) => Promise<AuthResponse>;
   register: (data: RegisterInput) => Promise<AuthResponse>;
@@ -56,11 +57,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [token, queryClient, setLocation]
   );
 
-  const { data: user, isLoading } = useQuery<User>({
+  const { data: user, isLoading, isFetching } = useQuery<User>({
     queryKey: ["user"],
     queryFn: () => api("/api/auth/me").then((res) => res.json() as Promise<User>),
     enabled: !!token,
     retry: false,
+    staleTime: 0,
   });
 
   const loginMutation = useMutation<AuthResponse, Error, LoginInput>({
@@ -100,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user: user ?? null,
         isLoading,
+        isFetching,
         token,
         login: loginMutation.mutateAsync,
         register: registerMutation.mutateAsync,
