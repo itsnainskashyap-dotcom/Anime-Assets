@@ -170,7 +170,7 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
         if (s === "FAILED") throw new MagnificError("Image generation failed", 502, v);
         return Array.isArray(v.data?.generated) && v.data!.generated!.length > 0;
       },
-      { intervalMs: 4000, timeoutMs: 5 * 60 * 1000 },
+      { intervalMs: 2000, timeoutMs: 5 * 60 * 1000 },
     );
     imageUrls = final.data?.generated;
   }

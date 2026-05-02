@@ -422,15 +422,33 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     });
   }
 
-  // ── PHASE 1: portraits in parallel (no reference image yet) ──────────
-  // Concurrency capped at 4 to stay friendly to the upstream image API.
-  const PORTRAIT_CONCURRENCY = 4;
-  const portraitResults = await pool(todo, PORTRAIT_CONCURRENCY, async (char) => {
+  // ── PIPELINED character generation ────────────────────────────────────
+  // For each character: generate the portrait THEN immediately kick off all
+  // 3 model-sheet angles in parallel using that portrait as a reference image.
+  // Running multiple character pipelines concurrently (up to CHAR_CONCURRENCY)
+  // means Character 1's sheets can start while Character 2's portrait is still
+  // generating — user sees fully-complete character cards appearing one by one.
+  const CHAR_CONCURRENCY = 2; // portrait + up to 3 sheets per char = max 8 concurrent
+
+  const SHEET_ANGLES: Array<{
+    field: "model_sheet_front_url" | "model_sheet_three_quarter_url" | "model_sheet_back_url";
+    label: string;
+    aspect: string;
+  }> = [
+    { field: "model_sheet_front_url",           label: "full body, front view, neutral standing pose, EXACT same face, hair, outfit and proportions as the reference portrait above",        aspect: "9:16" },
+    { field: "model_sheet_three_quarter_url",   label: "full body, three-quarter side view, neutral standing pose, EXACT same face, hair, outfit and proportions as the reference portrait above", aspect: "9:16" },
+    { field: "model_sheet_back_url",            label: "full body, back view, neutral standing pose, EXACT same hair, outfit and proportions as the reference portrait above",                aspect: "9:16" },
+  ];
+
+  await pool(todo, CHAR_CONCURRENCY, async (char) => {
     const appearance = char.appearance_json ? JSON.parse(char.appearance_json) : {};
     const sharedDesc = `${animeStyle} anime style, ${char.name}, ${char.role || "supporting character"}. Hair: ${appearance.hairColor || "dark"} ${appearance.hairStyle || ""}. Eyes: ${appearance.eyeColor || "expressive"}. Skin: ${appearance.skinTone || "natural"}. Build: ${appearance.build || "average"}. Outfit: ${appearance.outfit || "signature outfit"}. Distinguishing: ${appearance.distinguishingFeatures || ""}. Cinematic lighting, sharp linework, high quality cel-shading, no text, character isolated on neutral background.`;
+
+    // ── Step 1: Portrait ─────────────────────────────────────────────────
+    let portraitUrl: string | null = null;
     try {
       const img = await generateImage({
-        prompt: `${sharedDesc} expressive portrait, head and shoulders, looking forward.`,
+        prompt: `${sharedDesc} expressive portrait, head and shoulders, looking directly forward, clean neutral background.`,
         aspectRatio: "1:1",
         userId: task.user_id!,
         projectId: task.project_id!,
@@ -448,67 +466,43 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
         payload: { characterId: char.id, field: "portrait_url", url: img.url },
       });
       generated.push({ id: char.id, name: char.name, portraitUrl: img.url });
-      return { char, sharedDesc, portraitUrl: img.url };
+      portraitUrl = img.url;
     } catch (err) {
       logger.error({ err, characterId: char.id, angle: "portrait_url" }, "Character portrait generation failed");
       portraitFailures++;
-      return null;
+      return; // Skip model sheets if portrait failed
     }
-  });
 
-  // ── PHASE 2: 3 model-sheet angles per character, in parallel, ALL using
-  // the just-generated portrait_url as reference for visual consistency.
-  // Total in-flight = portraitsReady * 3, so cap pool size at 6 to keep
-  // upstream load reasonable.
-  type SheetJob = {
-    charId: string;
-    name: string;
-    field: "model_sheet_front_url" | "model_sheet_three_quarter_url" | "model_sheet_back_url";
-    label: string;
-    aspect: string;
-    sharedDesc: string;
-    referenceUrls: string[];
-  };
-  const sheetJobs: SheetJob[] = [];
-  for (const r of portraitResults) {
-    if (!r) continue;
-    const refUrl = toAbsoluteUrl(r.portraitUrl);
+    // ── Step 2: 3 model-sheet angles in parallel using portrait as ref ───
+    // The portrait is fetched once, base64-encoded, and cached by buildReferenceImages.
+    const refUrl = toAbsoluteUrl(portraitUrl);
     const referenceUrls = refUrl ? [refUrl] : [];
-    const baseSheets: Array<Omit<SheetJob, "charId" | "name" | "sharedDesc" | "referenceUrls">> = [
-      { field: "model_sheet_front_url", label: "full body model sheet, front view, neutral pose, standing, EXACT same face, hair, outfit, and proportions as reference portrait", aspect: "9:16" },
-      { field: "model_sheet_three_quarter_url", label: "full body model sheet, three-quarter side view, neutral pose, EXACT same face, hair, outfit, and proportions as reference portrait", aspect: "9:16" },
-      { field: "model_sheet_back_url", label: "full body model sheet, back view, neutral pose, EXACT same hair, outfit, and proportions as reference portrait", aspect: "9:16" },
-    ];
-    for (const s of baseSheets) {
-      sheetJobs.push({ ...s, charId: r.char.id, name: r.char.name, sharedDesc: r.sharedDesc, referenceUrls });
-    }
-  }
 
-  const SHEET_CONCURRENCY = 6;
-  await pool(sheetJobs, SHEET_CONCURRENCY, async (job) => {
-    try {
-      const img = await generateImage({
-        prompt: `${job.sharedDesc} ${job.label}.`,
-        aspectRatio: job.aspect,
-        referenceUrls: job.referenceUrls,
-        userId: task.user_id!,
-        projectId: task.project_id!,
-        assetType: `characters/${job.charId}`,
-        filename: `${job.field}.png`,
-      });
-      db.prepare(
-        `UPDATE characters SET ${job.field} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
-      ).run(img.url, job.charId);
-      recordPlaygroundEvent({
-        projectId: task.project_id!,
-        eventType: "character_image_ready",
-        agent: "character_director",
-        message: `${job.name}: ${job.field.replace(/_url$/, "").replace(/_/g, " ")} ready.`,
-        payload: { characterId: job.charId, field: job.field, url: img.url },
-      });
-    } catch (err) {
-      logger.error({ err, characterId: job.charId, angle: job.field }, "Character model-sheet generation failed");
-    }
+    await Promise.all(SHEET_ANGLES.map(async (angle) => {
+      try {
+        const img = await generateImage({
+          prompt: `${sharedDesc} ${angle.label}.`,
+          aspectRatio: angle.aspect,
+          referenceUrls,
+          userId: task.user_id!,
+          projectId: task.project_id!,
+          assetType: `characters/${char.id}`,
+          filename: `${angle.field}.png`,
+        });
+        db.prepare(
+          `UPDATE characters SET ${angle.field} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+        ).run(img.url, char.id);
+        recordPlaygroundEvent({
+          projectId: task.project_id!,
+          eventType: "character_image_ready",
+          agent: "character_director",
+          message: `${char.name}: ${angle.field.replace(/_url$/, "").replace(/_/g, " ")} ready.`,
+          payload: { characterId: char.id, field: angle.field, url: img.url },
+        });
+      } catch (err) {
+        logger.error({ err, characterId: char.id, angle: angle.field }, "Character model-sheet generation failed");
+      }
+    }));
   });
 
   if (attempted > 0 && generated.length === 0) {

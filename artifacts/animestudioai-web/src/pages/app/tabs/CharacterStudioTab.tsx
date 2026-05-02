@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { User, Lock, Loader2, ShieldCheck, Image as ImageIcon, Upload, AlertTriangle } from "lucide-react";
 import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
@@ -35,16 +36,37 @@ function parseAppearance(raw: string | undefined): Appearance {
   try { return JSON.parse(raw) as Appearance; } catch { return {}; }
 }
 
-function PortraitCard({ url, label }: { url?: string | null; label: string }) {
+function PortraitCard({ url, label, isPortrait, portraitReady }: {
+  url?: string | null;
+  label: string;
+  isPortrait?: boolean;
+  portraitReady?: boolean;
+}) {
+  const generating = !url && (isPortrait || portraitReady);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="aspect-square rounded-xl border border-border/50 bg-card/50 overflow-hidden flex items-center justify-center relative">
         {url ? (
-          <img src={url} alt={label} className="w-full h-full object-cover" />
+          <motion.img
+            key={url}
+            src={url}
+            alt={label}
+            className="w-full h-full object-cover"
+            initial={{ opacity: 0, scale: 1.04 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.4 }}
+          />
+        ) : generating ? (
+          <div className="flex flex-col items-center gap-2 text-muted-foreground/50">
+            <div className="relative">
+              <ImageIcon className="w-6 h-6 opacity-40" />
+              <Loader2 className="w-4 h-4 animate-spin absolute -bottom-1.5 -right-1.5 text-primary/70" />
+            </div>
+            <span className="text-[10px] text-muted-foreground/50">Generating…</span>
+          </div>
         ) : (
-          <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
+          <div className="flex flex-col items-center gap-2 text-muted-foreground/20">
             <ImageIcon className="w-6 h-6" />
-            <Loader2 className="w-4 h-4 animate-spin" />
           </div>
         )}
       </div>
@@ -69,9 +91,12 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
     },
     refetchInterval: (query) => {
       const chars = query.state.data as Character[] | undefined;
-      if (!chars || chars.length === 0) return 5000;
-      const anyPending = chars.some(c => !c.portrait_url);
-      return anyPending ? 5000 : false;
+      if (!chars || chars.length === 0) return 3000;
+      // Keep polling until ALL 4 images are ready for EVERY character
+      const allComplete = chars.every(
+        c => c.portrait_url && c.model_sheet_front_url && c.model_sheet_three_quarter_url && c.model_sheet_back_url,
+      );
+      return allComplete ? false : 3000;
     },
   });
 
@@ -122,7 +147,13 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
   const selected = characters.find(c => c.id === selectedId) ?? characters[0] ?? null;
   const appearance = parseAppearance(selected?.appearance_json);
   const allPortraitsDone = characters.length > 0 && characters.every(c => c.portrait_url);
+  const allImagesDone = characters.length > 0 && characters.every(
+    c => c.portrait_url && c.model_sheet_front_url && c.model_sheet_three_quarter_url && c.model_sheet_back_url,
+  );
   const portraitCount = characters.filter(c => c.portrait_url).length;
+  const doneCount = characters.filter(
+    c => c.portrait_url && c.model_sheet_front_url && c.model_sheet_three_quarter_url && c.model_sheet_back_url,
+  ).length;
 
   if (isLoading) {
     return (
@@ -197,9 +228,15 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
         <div className="p-4 border-b border-border/50 flex items-center justify-between">
           <div>
             <h3 className="font-bold text-sm">Characters</h3>
-            <p className="text-xs text-muted-foreground">{portraitCount}/{characters.length} portraits ready</p>
+            <p className="text-xs text-muted-foreground">
+              {allImagesDone
+                ? `${characters.length}/${characters.length} complete`
+                : portraitCount > 0
+                  ? `${doneCount}/${characters.length} full sets • ${portraitCount} portraits`
+                  : `${portraitCount}/${characters.length} portraits ready`}
+            </p>
           </div>
-          {!allPortraitsDone && (
+          {!allImagesDone && (
             <div className="flex items-center gap-1.5 text-xs text-amber-400">
               <Loader2 className="w-3 h-3 animate-spin" />
               Generating
@@ -247,7 +284,11 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
                 <div className="font-semibold text-sm truncate">{c.name}</div>
                 <div className="text-xs text-muted-foreground truncate">{c.role ?? "Character"}</div>
               </div>
-              {c.portrait_url && <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0 ml-auto" />}
+              {c.portrait_url && c.model_sheet_front_url && c.model_sheet_three_quarter_url && c.model_sheet_back_url
+                ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0 ml-auto" />
+                : c.portrait_url
+                  ? <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0 ml-auto" />
+                  : null}
             </button>
           ))}
         </div>
@@ -279,10 +320,10 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
 
             {/* Portrait + Model sheets */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PortraitCard url={selected.portrait_url} label="Portrait" />
-              <PortraitCard url={selected.model_sheet_front_url} label="Front View" />
-              <PortraitCard url={selected.model_sheet_three_quarter_url} label="¾ View" />
-              <PortraitCard url={selected.model_sheet_back_url} label="Back View" />
+              <PortraitCard url={selected.portrait_url} label="Portrait" isPortrait />
+              <PortraitCard url={selected.model_sheet_front_url}         label="Front View"   portraitReady={!!selected.portrait_url} />
+              <PortraitCard url={selected.model_sheet_three_quarter_url} label="¾ View"       portraitReady={!!selected.portrait_url} />
+              <PortraitCard url={selected.model_sheet_back_url}          label="Back View"    portraitReady={!!selected.portrait_url} />
             </div>
 
             {/* Description + Appearance */}
