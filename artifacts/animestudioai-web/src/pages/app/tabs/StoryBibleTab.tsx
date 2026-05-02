@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Sparkles, BookOpen, Wand2, CheckCircle2, Clock, Lock, Unlock, ShieldCheck } from "lucide-react";
+import { Loader2, BookOpen, CheckCircle2, Clock, Lock, Unlock, ShieldCheck } from "lucide-react";
+import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
@@ -111,7 +112,7 @@ export default function StoryBibleTab({ project }: { project: Project }) {
                 disabled={generateBible.isPending}
                 className="gap-2 border-primary/30 hover:border-primary"
               >
-                <Wand2 className="w-4 h-4 text-primary" />
+                <PiMagicWandDuotone className="w-4 h-4 text-primary" />
                 Generate Bible
               </Button>
             )}
@@ -145,7 +146,7 @@ export default function StoryBibleTab({ project }: { project: Project }) {
                   disabled={generateChars.isPending}
                   className="gap-2"
                 >
-                  {generateChars.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-primary" />}
+                  {generateChars.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PiMagicWandDuotone className="w-4 h-4 text-primary" />}
                   Generate Characters
                 </Button>
               </>
@@ -166,7 +167,7 @@ export default function StoryBibleTab({ project }: { project: Project }) {
           <div className="p-8 rounded-xl border border-amber-500/20 bg-amber-500/5 space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
-                <Wand2 className="w-5 h-5 text-amber-400 animate-pulse" />
+                <PiMagicWandDuotone className="w-5 h-5 text-amber-400 animate-pulse" />
               </div>
               <div>
                 <p className="font-semibold text-amber-300">AI Director is writing your Story Bible</p>
@@ -190,7 +191,7 @@ export default function StoryBibleTab({ project }: { project: Project }) {
             <BookOpen className="w-12 h-12 text-muted-foreground/30 mx-auto" />
             <p className="text-muted-foreground">Story bible not generated yet.</p>
             <Button onClick={() => generateBible.mutate()} disabled={generateBible.isPending} className="gap-2">
-              <Wand2 className="w-4 h-4" /> Generate Bible
+              <PiMagicWandDuotone className="w-4 h-4" /> Generate Bible
             </Button>
           </div>
         )}

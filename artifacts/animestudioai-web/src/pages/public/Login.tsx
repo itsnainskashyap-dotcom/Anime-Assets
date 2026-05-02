@@ -4,7 +4,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion } from "framer-motion";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { PiBookOpenDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -72,7 +73,7 @@ export default function Login() {
             </div>
           </Link>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/15 text-primary text-xs font-semibold mb-5 border border-primary/30 backdrop-blur-sm">
-            <Sparkles className="w-3.5 h-3.5" />
+            <PiBookOpenDuotone className="w-4 h-4" />
             Continue your story
           </div>
           <h2 className="text-4xl xl:text-5xl font-bold mb-4 tracking-tight leading-tight">

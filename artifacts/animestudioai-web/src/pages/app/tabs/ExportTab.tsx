@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Download, Share2, Settings, FileVideo, FileText, Loader2, Play, Sparkles, Wand2 } from "lucide-react";
+import { Download, Share2, Settings, FileVideo, Loader2, Play } from "lucide-react";
+import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -35,7 +36,7 @@ export default function ExportTab({ project }: { project: Project }) {
              <div className="w-full flex items-center justify-between">
                <div>
                  <div className="font-bold text-lg">{project.title} - Final Render</div>
-                 <div className="text-sm text-primary flex items-center gap-2"><Sparkles className="w-4 h-4"/> 4K UHD • 24 FPS</div>
+                 <div className="text-sm text-primary flex items-center gap-2"><PiMagicWandDuotone className="w-4 h-4"/> 4K UHD • 24 FPS</div>
                </div>
                <Button className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-full px-6">
                  <Play className="w-4 h-4" /> Play Master

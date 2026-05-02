@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ComponentType, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity, BookOpen, Users, Mountain, LayoutTemplate, Layers, Film, Music,
   Download, Send, Loader2, ShieldCheck, Lock, CheckCircle2, Circle,
-  Sparkles, RadioTower, BrainCircuit, Wand2, AlertTriangle, MessageSquare,
+  RadioTower, BrainCircuit, AlertTriangle, MessageSquare,
 } from "lucide-react";
+import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -17,7 +18,7 @@ import type { AgentLog, PlaygroundEvent, Project } from "@/types/api";
 interface Stage {
   id: string;
   label: string;
-  icon: typeof BookOpen;
+  icon: ComponentType<{ className?: string }>;
   agent: string;
   description: string;
   matchEvent: (e: PlaygroundEvent) => boolean;
@@ -27,7 +28,7 @@ const STAGES: Stage[] = [
   { id: "intake", label: "Story Intake", icon: BookOpen, agent: "Story Director",
     description: "Capturing your premise, tone and runtime target.",
     matchEvent: (e) => /intake|story_prompt|project_created/i.test(e.event_type) },
-  { id: "story", label: "Story Director", icon: Wand2, agent: "Story Director",
+  { id: "story", label: "Story Director", icon: PiMagicWandDuotone, agent: "Story Director",
     description: "Drafting the full story with acts, twists and climax.",
     matchEvent: (e) => /story_bible_(generate|generating|ready)|story_director/i.test(e.event_type) },
   { id: "finalize", label: "Story Finalization", icon: ShieldCheck, agent: "You + Story Director",
@@ -430,7 +431,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
               {/* Latest message card */}
               <div className="rounded-2xl border border-border/50 bg-card/40 backdrop-blur p-5 space-y-3">
                 <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
-                  <Sparkles className="w-3 h-3 text-primary" /> Latest from {activeStage.agent}
+                  <PiMagicWandDuotone className="w-3 h-3 text-primary" /> Latest from {activeStage.agent}
                 </div>
                 <p className="text-foreground/90 text-sm leading-relaxed min-h-[2.5rem]">
                   {activeStageState.lastMessage || (
@@ -505,7 +506,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
           <div className="flex-1 overflow-y-auto scrollbar-none p-4 space-y-3">
             {chatEvents.length === 0 && (
               <div className="text-center text-xs text-muted-foreground py-8 space-y-2">
-                <Sparkles className="w-6 h-6 text-primary/40 mx-auto" />
+                <PiMagicWandDuotone className="w-6 h-6 text-primary/40 mx-auto" />
                 <p>Try a directive:</p>
                 <div className="space-y-1.5 pt-2">
                   {[
@@ -662,7 +663,7 @@ function FinalizeCard({
   return (
     <div className="rounded-2xl border border-primary/40 bg-gradient-to-br from-primary/15 to-primary/5 p-5 flex items-start gap-4 relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.15),transparent_60%)] pointer-events-none" />
-      <Wand2 className="w-6 h-6 text-primary shrink-0 mt-0.5 relative" />
+      <PiMagicWandDuotone className="w-6 h-6 text-primary shrink-0 mt-0.5 relative" />
       <div className="relative flex-1">
         <p className="font-semibold">Ready for Finalization</p>
         <p className="text-sm text-muted-foreground mt-1">

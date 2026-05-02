@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Music, Play, Loader2, Sparkles, Mic, FileVideo, Download, FileText } from "lucide-react";
+import { Music, Play, Loader2, Mic, FileVideo, Download, FileText } from "lucide-react";
+import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,7 +50,7 @@ export default function SongTab({ project }: { project: Project }) {
     { id: "generate-lyrics", label: "Lyrics", icon: FileText },
     { id: "generate-music", label: "Music & Vocals", icon: Mic },
     { id: "generate-video", label: "Visuals", icon: FileVideo },
-    { id: "lipsync", label: "Lip Sync", icon: Sparkles },
+    { id: "lipsync", label: "Lip Sync", icon: PiMagicWandDuotone },
     { id: "export", label: "Final Export", icon: Download }
   ];
 

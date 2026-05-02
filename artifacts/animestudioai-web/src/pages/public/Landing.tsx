@@ -1,9 +1,16 @@
 import { Link } from "wouter";
 import { motion } from "framer-motion";
+import { ChevronRight, ArrowRight, Github, Twitter } from "lucide-react";
 import {
-  Play, Sparkles, Wand2, ChevronRight, Zap, Brain, Palette,
-  Clock, Star, ArrowRight, Github, Twitter,
-} from "lucide-react";
+  PiPlayCircleDuotone,
+  PiMagicWandDuotone,
+  PiLightningDuotone,
+  PiBrainDuotone,
+  PiPaletteDuotone,
+  PiClockDuotone,
+  PiStarDuotone,
+  PiSlidersHorizontalDuotone,
+} from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { AnimePoster } from "@/components/ui/anime-poster";
 import heroBg from "@assets/generated_images/hero_landing.png";
@@ -18,6 +25,7 @@ import gFantasy from "@assets/generated_images/genre_fantasy.png";
 import gScifi from "@assets/generated_images/genre_scifi.png";
 import gHorror from "@assets/generated_images/genre_horror.png";
 import gSlice from "@assets/generated_images/genre_slice.png";
+import gAdventure from "@assets/generated_images/genre_adventure.png";
 
 const fadeUp = {
   initial: { opacity: 0, y: 24 },
@@ -34,7 +42,7 @@ const GENRES = [
   { src: gScifi, label: "Sci-Fi", caption: "Stations, ships, the unknown." },
   { src: gSlice, label: "Slice of Life", caption: "Cozy, warm, everyday joy." },
   { src: gHorror, label: "Horror", caption: "Quiet dread, hidden things." },
-  { src: gAction, label: "Adventure", caption: "Long journeys, big horizons." },
+  { src: gAdventure, label: "Adventure", caption: "Long journeys, big horizons." },
 ];
 
 const FEATURES = [
@@ -176,13 +184,13 @@ export default function Landing() {
             >
               <Link href="/signup">
                 <Button size="lg" className="w-full sm:w-auto text-base px-8 h-14 rounded-full gap-2 group">
-                  <Wand2 className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+                  <PiMagicWandDuotone className="w-5 h-5 group-hover:rotate-12 transition-transform" />
                   Enter the Studio
                 </Button>
               </Link>
               <Link href="#workflow">
                 <Button size="lg" variant="outline" className="w-full sm:w-auto text-base px-8 h-14 rounded-full gap-2 border-border/60 backdrop-blur-md">
-                  <Play className="w-5 h-5" /> See How It Works
+                  <PiPlayCircleDuotone className="w-6 h-6" /> See How It Works
                 </Button>
               </Link>
             </motion.div>
@@ -195,11 +203,11 @@ export default function Landing() {
               transition={{ delay: 0.5, duration: 0.6 }}
             >
               <div className="flex items-center gap-1.5">
-                {[...Array(5)].map((_, i) => <Star key={i} className="w-3 h-3 fill-amber-400 text-amber-400" />)}
+                {[...Array(5)].map((_, i) => <PiStarDuotone key={i} className="w-3.5 h-3.5 text-amber-400" />)}
                 <span className="ml-1.5 font-medium">4.9 from creators</span>
               </div>
               <div className="hidden sm:flex items-center gap-1.5">
-                <Zap className="w-3 h-3 text-primary" />
+                <PiLightningDuotone className="w-3.5 h-3.5 text-primary" />
                 <span className="font-medium">First cut in &lt; 5 min</span>
               </div>
             </motion.div>
@@ -300,7 +308,7 @@ export default function Landing() {
         <div className="container mx-auto px-4 relative">
           <motion.div className="text-center mb-14 max-w-2xl mx-auto" {...fadeUp}>
             <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary mb-4">
-              <Palette className="w-3.5 h-3.5" />
+              <PiPaletteDuotone className="w-4 h-4" />
               Pick your universe
             </span>
             <h2 className="text-4xl md:text-5xl font-bold mb-4 tracking-tight">
@@ -332,9 +340,9 @@ export default function Landing() {
         <div className="container mx-auto px-4">
           <div className="grid md:grid-cols-3 gap-6 max-w-6xl mx-auto">
             {[
-              { icon: Brain, title: "AI Director Brain", desc: "A persistent agent that remembers your characters, themes, and continuity across every chunk." },
-              { icon: Clock, title: "Hours, not months", desc: "Cut production time by 100×. Iterate at the speed of an idea, ship at the polish of a studio." },
-              { icon: Sparkles, title: "Stay in control", desc: "Edit any beat, any storyboard panel, any frame. The studio adapts everything downstream." },
+              { icon: PiBrainDuotone, title: "AI Director Brain", desc: "A persistent agent that remembers your characters, themes, and continuity across every chunk." },
+              { icon: PiClockDuotone, title: "Hours, not months", desc: "Cut production time by 100×. Iterate at the speed of an idea, ship at the polish of a studio." },
+              { icon: PiSlidersHorizontalDuotone, title: "Stay in control", desc: "Edit any beat, any storyboard panel, any frame. The studio adapts everything downstream." },
             ].map((item, i) => (
               <motion.div
                 key={item.title}
@@ -375,7 +383,7 @@ export default function Landing() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link href="/signup">
               <Button size="lg" className="text-base px-8 h-14 rounded-full gap-2 shadow-lg shadow-primary/30">
-                <Wand2 className="w-5 h-5" /> Create your studio
+                <PiMagicWandDuotone className="w-5 h-5" /> Create your studio
               </Button>
             </Link>
             <Link href="/login">

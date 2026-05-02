@@ -4,7 +4,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { motion } from "framer-motion";
-import { Loader2, Sparkles, Check } from "lucide-react";
+import { Loader2, Check } from "lucide-react";
+import { PiRocketLaunchDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -79,7 +80,7 @@ export default function Signup() {
             </div>
           </Link>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/15 text-primary text-xs font-semibold mb-5 border border-primary/30 backdrop-blur-sm">
-            <Sparkles className="w-3.5 h-3.5" />
+            <PiRocketLaunchDuotone className="w-4 h-4" />
             Start your studio — free
           </div>
           <h2 className="text-4xl xl:text-5xl font-bold mb-5 tracking-tight leading-tight">

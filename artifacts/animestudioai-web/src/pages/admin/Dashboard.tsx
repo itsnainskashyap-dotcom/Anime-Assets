@@ -1,10 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
+import { ArrowUpRight } from "lucide-react";
 import {
-  Users, Activity, CreditCard, ShieldAlert,
-  Server, Key, HardDrive, Database, BrainCircuit, Bug, ArrowUpRight,
-} from "lucide-react";
+  PiUsersThreeDuotone,
+  PiPulseDuotone,
+  PiCreditCardDuotone,
+  PiShieldWarningDuotone,
+  PiCpuDuotone,
+  PiKeyDuotone,
+  PiHardDrivesDuotone,
+  PiDatabaseDuotone,
+  PiBrainDuotone,
+  PiBugDuotone,
+} from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { AnimatedLoader } from "@/components/ui/animated-loader";
 import { PageHeader } from "@/components/ui/page-header";
@@ -26,23 +35,23 @@ export default function AdminDashboard() {
   });
 
   const stats = [
-    { key: "users", title: "Total Users", value: dashboard?.users ?? 0, icon: Users, color: "text-primary", bg: "bg-primary/10", pulse: false },
-    { key: "active", title: "Active Jobs", value: dashboard?.activeJobs ?? 0, icon: Activity, color: "text-blue-400", bg: "bg-blue-500/10", pulse: (dashboard?.activeJobs ?? 0) > 0 },
-    { key: "credits", title: "Credits Spent (24h)", value: dashboard?.creditsSpent ?? 0, icon: CreditCard, color: "text-amber-400", bg: "bg-amber-500/10", pulse: false },
-    { key: "failed", title: "Failed Jobs (24h)", value: dashboard?.failedJobs ?? 0, icon: ShieldAlert, color: "text-destructive", bg: "bg-destructive/10", pulse: (dashboard?.failedJobs ?? 0) > 0 },
+    { key: "users", title: "Total Users", value: dashboard?.users ?? 0, icon: PiUsersThreeDuotone, color: "text-primary", bg: "bg-primary/10", pulse: false },
+    { key: "active", title: "Active Jobs", value: dashboard?.activeJobs ?? 0, icon: PiPulseDuotone, color: "text-blue-400", bg: "bg-blue-500/10", pulse: (dashboard?.activeJobs ?? 0) > 0 },
+    { key: "credits", title: "Credits Spent (24h)", value: dashboard?.creditsSpent ?? 0, icon: PiCreditCardDuotone, color: "text-amber-400", bg: "bg-amber-500/10", pulse: false },
+    { key: "failed", title: "Failed Jobs (24h)", value: dashboard?.failedJobs ?? 0, icon: PiShieldWarningDuotone, color: "text-destructive", bg: "bg-destructive/10", pulse: (dashboard?.failedJobs ?? 0) > 0 },
   ];
 
   const adminLinks = [
-    { title: "Users", href: "/admin/users", icon: Users },
-    { title: "Jobs Queue", href: "/admin/jobs", icon: Activity },
-    { title: "Provider Keys", href: "/admin/provider-keys", icon: Key },
-    { title: "Provider Health", href: "/admin/provider-health", icon: Server },
-    { title: "Failed Gens", href: "/admin/failed-generations", icon: ShieldAlert },
-    { title: "Billing", href: "/admin/billing", icon: CreditCard },
-    { title: "Storage", href: "/admin/storage", icon: HardDrive },
-    { title: "Agents", href: "/admin/agents", icon: BrainCircuit },
-    { title: "Memory", href: "/admin/memory", icon: Database },
-    { title: "Errors", href: "/admin/errors", icon: Bug },
+    { title: "Users", href: "/admin/users", icon: PiUsersThreeDuotone },
+    { title: "Jobs Queue", href: "/admin/jobs", icon: PiPulseDuotone },
+    { title: "Provider Keys", href: "/admin/provider-keys", icon: PiKeyDuotone },
+    { title: "Provider Health", href: "/admin/provider-health", icon: PiCpuDuotone },
+    { title: "Failed Gens", href: "/admin/failed-generations", icon: PiShieldWarningDuotone },
+    { title: "Billing", href: "/admin/billing", icon: PiCreditCardDuotone },
+    { title: "Storage", href: "/admin/storage", icon: PiHardDrivesDuotone },
+    { title: "Agents", href: "/admin/agents", icon: PiBrainDuotone },
+    { title: "Memory", href: "/admin/memory", icon: PiDatabaseDuotone },
+    { title: "Errors", href: "/admin/errors", icon: PiBugDuotone },
   ];
 
   if (isLoading) {

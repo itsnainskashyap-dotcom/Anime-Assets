@@ -1,6 +1,14 @@
 import { Link } from "wouter";
 import { motion } from "framer-motion";
-import { Plus, FolderKanban, Clock, Sparkles, Film, ArrowRight, Wand2 } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import {
+  PiPlusDuotone,
+  PiFolderOpenDuotone,
+  PiClockDuotone,
+  PiCoinsDuotone,
+  PiFilmReelDuotone,
+  PiMagicWandDuotone,
+} from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { AnimatedLoader } from "@/components/ui/animated-loader";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,7 +46,7 @@ export default function Dashboard() {
             transition={{ duration: 0.5 }}
           >
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/15 text-primary text-xs font-semibold mb-4 border border-primary/30 backdrop-blur-sm">
-              <Sparkles className="w-3.5 h-3.5" />
+              <PiFilmReelDuotone className="w-4 h-4" />
               Studio Dashboard
             </span>
           </motion.div>
@@ -76,7 +84,7 @@ export default function Dashboard() {
                   transition={{ type: "spring", stiffness: 300 }}
                   className="w-10 h-10 rounded-full bg-primary/15 flex items-center justify-center"
                 >
-                  <Plus className="w-5 h-5 text-primary" />
+                  <PiPlusDuotone className="w-5 h-5 text-primary" />
                 </motion.div>
                 <span className="font-semibold text-base">New Project</span>
                 <span className="text-xs text-muted-foreground">Start a new anime</span>
@@ -93,7 +101,7 @@ export default function Dashboard() {
           >
             <div className="flex items-center gap-3 text-muted-foreground mb-2">
               <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                <FolderKanban className="w-4 h-4 text-blue-400" />
+                <PiFolderOpenDuotone className="w-4 h-4 text-blue-400" />
               </div>
               <span className="text-sm font-medium">Active Projects</span>
             </div>
@@ -109,7 +117,7 @@ export default function Dashboard() {
           >
             <div className="flex items-center gap-3 text-muted-foreground mb-2">
               <div className="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-primary" />
+                <PiCoinsDuotone className="w-4 h-4 text-primary" />
               </div>
               <span className="text-sm font-medium">Available Credits</span>
             </div>
@@ -149,7 +157,7 @@ export default function Dashboard() {
                         <img src={project.thumbnailUrl} alt={project.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-secondary/40 to-primary/10 group-hover:from-secondary/60 group-hover:to-primary/20 transition-colors">
-                          <Film className="w-10 h-10 text-muted-foreground/50" />
+                          <PiFilmReelDuotone className="w-12 h-12 text-muted-foreground/50" />
                         </div>
                       )}
                       <div className="absolute top-2 right-2 bg-background/80 backdrop-blur text-xs font-medium px-2 py-1 rounded">
@@ -159,7 +167,7 @@ export default function Dashboard() {
                     <div className="p-4">
                       <h3 className="font-bold text-lg mb-1 truncate group-hover:text-primary transition-colors">{project.title}</h3>
                       <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                        <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {new Date(project.createdAt).toLocaleDateString()}</span>
+                        <span className="flex items-center gap-1"><PiClockDuotone className="w-3.5 h-3.5" /> {new Date(project.createdAt).toLocaleDateString()}</span>
                         <span className="capitalize">{project.format}</span>
                       </div>
                     </div>
@@ -180,13 +188,13 @@ export default function Dashboard() {
               transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
               className="inline-flex w-16 h-16 rounded-2xl bg-primary/10 items-center justify-center mb-4"
             >
-              <Wand2 className="w-7 h-7 text-primary" />
+              <PiMagicWandDuotone className="w-8 h-8 text-primary" />
             </motion.div>
             <h3 className="text-lg font-bold mb-2">Your studio is empty.</h3>
             <p className="text-muted-foreground mb-6 max-w-sm mx-auto">Direct your first cinematic short. The Director is standing by.</p>
             <Link href="/app/projects/new">
               <Button className="rounded-full gap-2">
-                <Plus className="w-4 h-4" /> Create Project
+                <PiPlusDuotone className="w-4 h-4" /> Create Project
               </Button>
             </Link>
           </motion.div>

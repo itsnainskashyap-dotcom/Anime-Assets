@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronRight, ChevronLeft, Film, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
+import { PiFilmReelDuotone, PiCoinsDuotone, PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +18,11 @@ import gFantasy from "@assets/generated_images/genre_fantasy.png";
 import gScifi from "@assets/generated_images/genre_scifi.png";
 import gHorror from "@assets/generated_images/genre_horror.png";
 import gSlice from "@assets/generated_images/genre_slice.png";
+import gAdventure from "@assets/generated_images/genre_adventure.png";
+import gCyberpunk from "@assets/generated_images/genre_cyberpunk.png";
+import gDrama from "@assets/generated_images/genre_drama.png";
+import gMystery from "@assets/generated_images/genre_mystery.png";
+import gPsychological from "@assets/generated_images/genre_psychological.png";
 
 const FORMATS = [
   { id: "short", label: "Animated Short", duration: "1-3 mins", credits: 500, desc: "A self-contained cinematic short." },
@@ -46,18 +52,18 @@ const DURATION_OPTIONS: Record<string, { label: string; seconds: number; credits
 };
 
 const GENRES: { name: string; img: string; caption: string }[] = [
-  { name: "Action",        img: gAction,  caption: "High-energy battles, dynamic motion." },
-  { name: "Adventure",     img: gFantasy, caption: "Long journeys, sweeping worlds." },
-  { name: "Fantasy",       img: gFantasy, caption: "Magic, myth, the impossible." },
-  { name: "Sci-Fi",        img: gScifi,   caption: "Stations, ships, alternate futures." },
-  { name: "Cyberpunk",     img: gScifi,   caption: "Neon cities, augmented humans." },
-  { name: "Mecha",         img: gMecha,   caption: "Towering robots, real stakes." },
-  { name: "Romance",       img: gRomance, caption: "Tender, slow-burn moments." },
-  { name: "Drama",         img: gRomance, caption: "Character-driven, emotional weight." },
-  { name: "Slice of Life", img: gSlice,   caption: "Cozy, warm, everyday joy." },
-  { name: "Mystery",       img: gHorror,  caption: "Hidden truths, slow reveals." },
-  { name: "Horror",        img: gHorror,  caption: "Quiet dread, ominous atmosphere." },
-  { name: "Psychological", img: gHorror,  caption: "Mind-bending, identity, paranoia." },
+  { name: "Action",        img: gAction,        caption: "High-energy battles, dynamic motion." },
+  { name: "Adventure",     img: gAdventure,     caption: "Long journeys, sweeping worlds." },
+  { name: "Fantasy",       img: gFantasy,       caption: "Magic, myth, the impossible." },
+  { name: "Sci-Fi",        img: gScifi,         caption: "Stations, ships, alternate futures." },
+  { name: "Cyberpunk",     img: gCyberpunk,     caption: "Neon cities, augmented humans." },
+  { name: "Mecha",         img: gMecha,         caption: "Towering robots, real stakes." },
+  { name: "Romance",       img: gRomance,       caption: "Tender, slow-burn moments." },
+  { name: "Drama",         img: gDrama,         caption: "Character-driven, emotional weight." },
+  { name: "Slice of Life", img: gSlice,         caption: "Cozy, warm, everyday joy." },
+  { name: "Mystery",       img: gMystery,       caption: "Hidden truths, slow reveals." },
+  { name: "Horror",        img: gHorror,        caption: "Quiet dread, ominous atmosphere." },
+  { name: "Psychological", img: gPsychological, caption: "Mind-bending, identity, paranoia." },
 ];
 
 const VOICES = [
@@ -204,7 +210,7 @@ export default function CreateProject() {
                     >
                       <div className="font-semibold">{d.label}</div>
                       <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" /> {d.credits.toLocaleString()}
+                        <PiCoinsDuotone className="w-3.5 h-3.5" /> {d.credits.toLocaleString()}
                       </div>
                     </button>
                   ))}
@@ -367,15 +373,15 @@ export default function CreateProject() {
           </div>
         </div>
 
-        <div className="flex-1 relative">
+        <div className="flex-1 min-h-0">
           <AnimatePresence mode="wait">
-            <div key={step} className="absolute inset-0">
+            <div key={step}>
               {renderStep()}
             </div>
           </AnimatePresence>
         </div>
 
-        <div className="pt-8 border-t border-border mt-auto flex items-center justify-between">
+        <div className="pt-8 mt-8 border-t border-border flex items-center justify-between">
           <Button variant="outline" onClick={handleBack} disabled={step === 1 || createProject.isPending}>
             <ChevronLeft className="w-4 h-4 mr-2" /> Back
           </Button>
@@ -393,7 +399,7 @@ export default function CreateProject() {
               {createProject.isPending ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
-                <Sparkles className="w-4 h-4 mr-2" />
+                <PiMagicWandDuotone className="w-4 h-4 mr-2" />
               )}
               Initialize Studio
             </Button>
@@ -406,7 +412,7 @@ export default function CreateProject() {
         <div className="sticky top-8 space-y-6">
           <div>
             <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-              <Film className="w-5 h-5 text-primary" /> Live Summary
+              <PiFilmReelDuotone className="w-5 h-5 text-primary" /> Live Summary
             </h3>
             
             <div className="space-y-4">
@@ -418,7 +424,7 @@ export default function CreateProject() {
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-muted-foreground">Required Credits</span>
                   <span className="font-medium text-primary flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" /> {estCredits.toLocaleString()}
+                    <PiCoinsDuotone className="w-3.5 h-3.5" /> {estCredits.toLocaleString()}
                   </span>
                 </div>
                 <div className="pt-3 border-t border-border/50">
@@ -435,7 +441,7 @@ export default function CreateProject() {
 
           <div className="p-4 rounded-xl bg-primary/10 border border-primary/20">
             <h4 className="font-semibold text-sm text-primary mb-2 flex items-center gap-2">
-              <Wand2 className="w-4 h-4" /> AI Director Note
+              <PiMagicWandDuotone className="w-4 h-4" /> AI Director Note
             </h4>
             <p className="text-xs text-muted-foreground leading-relaxed">
               Once initialized, the AI Director will automatically generate a detailed Story Bible based on your core prompt. You'll be able to review and modify it before proceeding to character design.

@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Loader2, Sparkles, LayoutTemplate, Film, RefreshCw, Download, ShieldCheck,
+  Loader2, LayoutTemplate, Film, RefreshCw, Download, ShieldCheck,
   AlertTriangle, ImageIcon, ListOrdered, FileText, Layers, History, Maximize2,
 } from "lucide-react";
+import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
@@ -120,7 +121,7 @@ export default function StoryboardTab({ project }: { project: Project }) {
           </p>
         </div>
         <Button className="gap-2" onClick={() => generateAll.mutate()} disabled={generateAll.isPending}>
-          {generateAll.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          {generateAll.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PiMagicWandDuotone className="w-4 h-4" />}
           Plan Storyboard
         </Button>
       </div>
@@ -146,7 +147,7 @@ export default function StoryboardTab({ project }: { project: Project }) {
             disabled={generateAll.isPending}
             title="Plan storyboard for all chunks"
           >
-            {generateAll.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            {generateAll.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PiMagicWandDuotone className="w-3.5 h-3.5" />}
           </Button>
         </div>
         <div className="flex-1 overflow-auto scrollbar-none p-2 space-y-1">

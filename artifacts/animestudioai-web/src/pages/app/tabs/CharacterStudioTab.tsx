@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { User, Lock, Loader2, ShieldCheck, Sparkles, Image as ImageIcon, Upload, AlertTriangle } from "lucide-react";
+import { User, Lock, Loader2, ShieldCheck, Image as ImageIcon, Upload, AlertTriangle } from "lucide-react";
+import { PiMagicWandDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
@@ -154,7 +155,7 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button className="gap-2" onClick={() => generateCharacters.mutate()} disabled={generateCharacters.isPending || !isFinalized}>
-            {generateCharacters.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {generateCharacters.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PiMagicWandDuotone className="w-4 h-4" />}
             Generate Characters
           </Button>
           <Button

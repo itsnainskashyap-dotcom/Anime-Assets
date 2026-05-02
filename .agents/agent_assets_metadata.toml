@@ -84,6 +84,36 @@ uri = "file://attached_assets/generated_images/feature_render.png"
 type = "image"
 title = "generated_image"
 
+[[generated]]
+id = "U8V_ZnEE-RX38IOzPjHha"
+uri = "file://attached_assets/generated_images/genre_adventure.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "SfLrR5mq1U-M2LGC1NohX"
+uri = "file://attached_assets/generated_images/genre_cyberpunk.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "G0zDo02b-VjVGIT0S6iWH"
+uri = "file://attached_assets/generated_images/genre_drama.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "Rokv5mYBC_6puzQvh8m0x"
+uri = "file://attached_assets/generated_images/genre_mystery.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "HPddauNZy9PTmUWLsO3lc"
+uri = "file://attached_assets/generated_images/genre_psychological.png"
+type = "image"
+title = "generated_image"
+
 [[outputs]]
 id = "3mUdqwBNQBu49CU6UmD5m"
 uri = "file://attached_assets/storyboard_chunk1_demo.png"

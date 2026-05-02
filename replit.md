@@ -1,265 +1,78 @@
-# Workspace
+# Overview
 
-## Overview
+This project is a pnpm workspace monorepo using TypeScript, focused on building AnimeStudioAI, a premium dark cinematic anime studio SaaS. The platform aims to provide a comprehensive suite of AI-powered tools for anime creation, from story generation to video production and audio direction. It targets a niche market with high-quality, AI-driven content creation capabilities.
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+# User Preferences
 
-## Stack
+I want iterative development. I want to be asked before major changes are made to the codebase. I prefer clear and concise explanations.
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
+# System Architecture
+
+The project is structured as a pnpm workspace monorepo.
+
+**Core Technologies:**
+- **Monorepo Tool**: pnpm workspaces
+- **Node.js**: Version 24
+- **TypeScript**: Version 5.9
+- **API Framework**: Express 5
+- **Database**: SQLite (for `api-server` artifact) with Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **API Codegen**: Orval (from OpenAPI spec)
+- **Build Tool**: esbuild (CJS bundle)
 
-## Key Commands
+**UI/UX Decisions (AnimeStudioAI web):**
+The web artifact (`artifacts/animestudioai-web`) uses reusable UI primitives for consistency.
+- **Loading States**: `animated-loader.tsx` for data fetches and queue polling.
+- **Page Headers**: `page-header.tsx` for consistent section titles and actions.
+- **Visual Selection**: `anime-poster.tsx` for visual option selection (genres, art styles, characters).
+- **Artwork**: Pre-generated anime artwork is aliased via `@assets/`.
+- **Animations**: Uses `framer-motion` with `easeOut` cubic-bezier for smooth transitions.
+- **Navigation**: `layoutId="active-nav-pill"` for active route highlighting in `AppShell.tsx`.
+- **Section Reveals**: Uses `whileInView` with `viewport={{ once: true, margin: "-80px" }}` for one-time animation on scroll.
 
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+**Technical Implementations and Features:**
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+- **Database Management**: SQLite via `better-sqlite3` with WAL mode and foreign keys enabled. Schema initialized from `src/db/schema.sql`.
+- **Authentication**: JWT (HS256) based, with super admin bootstrapping via environment variables (`ADMIN_EMAIL`, `ADMIN_PASSWORD`).
+- **Job Queue**: Persistent worker queue using SQL-level worker locking, heartbeats, and orphan-recovery. Features include cascading terminal failures to dependent tasks and idempotency keys for production pipelines.
+- **AI Integration (Providers)**:
+    - **Text + Vision**: Anthropic Claude (`claude-sonnet-4-6`) for story bible, song lyrics, and chunk validation. Utilizes streaming for long responses and large `maxTokens` to avoid truncation.
+    - **Image/Video/Music/TTS/SFX/Lipsync/Transcription**: Magnific HTTP API (branded as "Animax Ultra") for various media generation. Supports configurable endpoints via environment variables. Image references are base64-encoded and cached.
+    - **Vision Fallback**: Prefers Gemini 2.5 Flash/Pro, falling back to Claude vision.
+    - **Demo Mode**: `DEMO_MODE=true` short-circuits providers to deterministic stubs.
+    - **SSRF Guard**: `lib/safeFetch.ts` enforces scheme, host allowlist, DNS resolution, and blocks private IPs.
+    - **Multi-key Failover**: `providers/registry.ts` manages multiple provider keys, implementing retries and cooldowns for failed keys.
+- **Storage**: Local disk storage rooted at `STORAGE_ROOT_PATH`, served at `/storage`.
+- **Payment Processing**: Razorpay integration with webhook signature verification.
+- **Data Encryption**: Provider keys are AES-256-GCM encrypted using `APP_ENCRYPTION_KEY`.
+- **V17 Chunk Pipeline**: `services/promptCompiler.ts` builds prompts for Magnific. `services/visualizationDirector.ts` handles image generation for video chunks. `services/referenceVideo.ts` downloads, probes, and trims video clips.
+- **Audio Director**: `services/audioDirector.ts` plans dialogue, BGM, and SFX, utilizing Magnific with phonetic normalization.
+- **Capability Tester**: `services/capabilityTester.ts` performs real probes for various AI capabilities, persisted to `provider_capability_tests`.
+- **Export Variants**: Generates concatenated MP4, 720p MP4, 9:16 MP4, SRT, and ZIP bundles via `archiver`.
+- **Song Studio Pipeline**: Six-stage pipeline for song creation: `song_lyrics_generate`, `song_music_generate`, `song_video_generate`, `song_lipsync`, and `song_export`. Enforces ownership for tasks.
+- **Notifications**: Queue-driven and direct notifications persisted to `notifications` and published via SSE.
+- **Live Progress Snapshots**: Every 15 seconds, active projects' task and chunk counts are snapshotted to `live_progress_snapshots`.
+- **Autonomous Pipeline**: After initial project submission, stages automatically enqueue the next stage (e.g., `story_bible_generate` -> `character_generate` -> `storyboard_generate` -> `visualization_generate` -> `production_pipeline`).
+- **Credit-saving Idempotency**: `enqueueStageOnce` prevents duplicate tasks and `findInflightStage` checks before debiting credits to avoid double-charging.
+- **Exact-duration Selector + Parallelized Image Generation**:
+    - Project wizard allows selecting target durations (short, episode, series) impacting credit cost and `estimated_seconds`.
+    - `handleStoryBible` generates scene plans based on `estimated_seconds`.
+    - `lib/concurrency.ts` provides a bounded-concurrency runner (`pool`) for parallel image generation tasks (e.g., character portraits, model sheets, scene visualizations).
+    - `toAbsoluteUrl` ensures correct `PUBLIC_BASE_URL` usage for upstream image APIs.
+- **Storyboard Composer**: `services/storyboardComposer.ts` generates a composite anime storyboard image for each 10s video chunk. This involves a two-phase pipeline:
+    1. **Plan**: Claude generates shot breakdown (6-12 shots with details).
+    2. **Render**: Magnific generates a grid-based storyboard image using character portraits and `start_frame_url`.
+    - Storyboard generation is a mandatory gating step before video generation.
+    - Storyboard sheets are prioritized in `imageRefsApi` for Kling-Omni-Pro.
+    - Fix for `mime_type` requirement on `reference_images[]` in Magnific API.
 
-## AnimeStudioAI (artifacts/api-server)
+# External Dependencies
 
-A premium dark cinematic anime studio SaaS being built per the V17 master prompt
-(`attached_assets/AnimeStudioAI_V17_FULL_FINAL_REPLIT_MASTER_PROMPT_*.md`). The
-api-server artifact intentionally diverges from the workspace defaults:
-
-- **Database**: SQLite via `better-sqlite3` (mandated by spec, not Postgres). DB
-  file lives at `artifacts/api-server/data/animestudio.db` and is initialised
-  from `src/db/schema.sql` on first boot. WAL mode + foreign keys enabled.
-- **Auth**: JWT (HS256) issued by `routes/auth.ts`, verified by
-  `middleware/auth.ts`. Bootstrap a super admin via the `ADMIN_EMAIL` and
-  `ADMIN_PASSWORD` env vars.
-- **Job queue**: Persistent worker queue in `services/queue.ts` and
-  `jobs/queueWorker.ts` using SQL-level worker locking (UPDATE … WHERE
-  locked_by_worker_id IS NULL), heartbeats, and an orphan-recovery sweeper.
-- **Providers** (`src/providers/*.ts`): Real AI integrations.
-  - **Text + Vision**: Anthropic Claude (`claude-sonnet-4-6`) via the Replit AI
-    Integrations proxy. Reads `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` /
-    `AI_INTEGRATIONS_ANTHROPIC_API_KEY`. Used for the story bible, song
-    lyrics, and chunk validation (vision). `textProvider.ts` calls
-    `client.messages.stream(...).finalMessage()` (NOT `messages.create`)
-    because Anthropic now requires streaming for any request that may exceed
-    the 10-minute timeout. Long JSON responses (story bible) use
-    `maxTokens: 32768` in `jobs/handlers.ts` to avoid truncation.
-  - **Image / Video / Music / TTS / SFX / Lipsync / Transcription**: Magnific
-    HTTP API (defaults to Freepik base `https://api.freepik.com`,
-    `x-freepik-api-key` header). All endpoints are configurable via env vars
-    (`MAGNIFIC_*_ENDPOINT`). The Freepik nano-banana-pro endpoint expects
-    `reference_images` as an array of `{ image: "<base64>" }` objects (not
-    bare URL strings); `imageProvider.ts` downloads each reference URL via
-    `safeFetch`, base64-encodes it, and caches the result in a small
-    URL-keyed LRU/TTL map (`refCache`, 64 entries × 10 min) to avoid
-    re-fetching the same character/anchor frame across the ~145 wave-2
-    requests per project. Outputs are mirrored into local `/storage` so the
-    UI never has to hit a third-party CDN. Magnific is masked behind the
-    visible name "Animax Ultra"; Claude is masked as the in-house "Story
-    Director", "Character Director", etc.
-  - `DEMO_MODE=true` short-circuits every provider to deterministic stubs so
-    the app boots without any API keys.
-  - **SSRF guard**: All outbound asset fetches go through `lib/safeFetch.ts`,
-    which enforces an http(s) scheme, a host allowlist (env
-    `SAFE_FETCH_ALLOW_HOSTS` extends defaults), DNS-resolves the host and
-    blocks RFC1918 / loopback / link-local / multicast addresses, and follows
-    redirects manually re-validating each hop.
-- **Queue safety**: `services/queue.ts` cascades terminal failures to all
-  dependent tasks via `cascadeFailDependents`, and unknown stages throw in
-  `runHandler` instead of silently completing. Video chunk handler throws
-  (rather than completing) when the provider has not yet returned a URL, so the
-  retry/backoff path is used. Production-pipeline idempotency keys are derived
-  from the chunk `attempt_number` instead of `Date.now()` so duplicate starts
-  are deduplicated.
-- **Storage / billing**: Local disk storage rooted at
-  `STORAGE_ROOT_PATH` (served at `/storage`); Razorpay payment provider with
-  webhook signature verification.
-- **Routes**: `/api/auth`, `/api/projects`, `/api/chunks`, `/api/song`,
-  `/api/notifications`, `/api/payments`, `/api/admin`, plus `/api/healthz`
-  and `/api/health` (returns `{ demoMode, engineLabel: "Animax Ultra" }`).
-- **Encryption**: Provider keys are AES-256-GCM encrypted using
-  `APP_ENCRYPTION_KEY` (see `lib/crypto.ts`).
-- **V17 chunk pipeline**: `services/promptCompiler.ts` builds 2200-char
-  Magnific prompts with character/env locks and the `@Video1` token in
-  reference-video mode. `services/visualizationDirector.ts` issues distinct
-  calls for the 5-image pack (seed/scene_board/start/end/element_1/2) and
-  fills every column on `video_chunks`. `services/referenceVideo.ts` uses
-  `ffprobe-static` + `ffmpeg-static` to download/probe/trim the previous
-  chunk's clip to ≤10s and persist it to local storage; chunk N>1 is forced
-  into `generation_mode='reference_video'`, queued sequentially via
-  `dependsOn: [prevTaskId]`, and auto-enqueues `audio_chunk_generate`,
-  `validation`, and `reference_video_trim` follow-ups.
-- **Audio Director** (`services/audioDirector.ts`): plans dialogue + BGM +
-  SFX per chunk through Claude, then renders with Magnific via a
-  Hinglish-aware phonetic normalizer (`services/phoneticNormalizer.ts`).
-- **Multi-key failover** (`providers/registry.ts`): `getActiveKey` returns
-  `{id, key, source}`; `recordKeyError` bumps `error_count`, sets
-  `cooldown_until` on 401/403/429/5xx, and logs a row to
-  `provider_failover_events`. `withFailover` retries with the next key.
-- **Vision fallback** (`providers/visionProvider.ts`): prefers Gemini 2.5
-  Flash (or Pro for `highAccuracy`) when `GOOGLE_API_KEY`/`GEMINI_API_KEY`
-  is configured; falls back to Claude vision otherwise.
-- **Capability tester** (`services/capabilityTester.ts`): real probes for
-  text, vision, image, text-to-video, image-to-video,
-  reference-video-token (@Video1), prompt-budget, native-audio,
-  multi-shot. Persisted to `provider_capability_tests`. Triggered by
-  `POST /api/admin/provider-capability-tests/run`.
-- **Export variants**: `handleExport` produces concat MP4, 720p MP4, 9:16
-  MP4, an SRT generated from `chunk_audio_plans`, and a ZIP bundle (via
-  `archiver`) — all rows recorded in `exported_files`.
-- **UI cues** (`AppShell` + `ChunkInspector`): Demo Mode badge sourced
-  from `/api/health`, and a "Reference Video" pill on chunks whose
-  `generation_mode='reference_video'`.
-- **Song Studio pipeline** (`jobs/handlers.ts`): six stages —
-  `song_lyrics_generate` (Song Bible + Lyrics Timing Agent: writes
-  `song_projects` + per-line `song_lyrics` rows with second-precise timing),
-  `song_music_generate` (writes `song_projects.music_url`),
-  `song_video_generate` (creates `song_video_chunks` rows + enqueues one
-  internal `song_chunk_video` per 10s segment), `song_lipsync` (per-chunk
-  Magnific lipsync), and `song_export` (SRT from `song_lyrics`, persists
-  `final_video_url`, fires user notification). All stages enforce
-  ownership via `loadSongForTask(task)` /
-  `loadOwnedSongById(songId, userId, projectId)` to prevent cross-user
-  songId tampering.
-- **Notification fan-out** (`services/notifications.ts` +
-  `handleNotification`): both queue-driven and direct callers persist to
-  `notifications` and publish an SSE `notification` event on the project
-  channel.
-- **Live progress snapshots** (`jobs/queueWorker.ts:snapshotLoop`): every
-  15 s, every active project (`status` in queued/generating/validating/
-  exporting/production_locked) gets a JSON snapshot of task + chunk
-  counts written to `live_progress_snapshots`, trimmed to the last 200
-  per project via SQLite `ROW_NUMBER() OVER (PARTITION BY project_id)`.
-- **Workflows are artifact-managed**: both servers run via the
-  artifact-defined workflows `artifacts/api-server: API Server` (port
-  8080) and `artifacts/animestudioai-web: web` (port 18134). Do NOT
-  add manual `[[workflows.workflow]]` blocks in `.replit` for these
-  services — they will collide on the same ports and one set will
-  appear FAILED. The api-server's `[services.development].run` uses
-  `sh -c 'PUBLIC_BASE_URL=https://${REPLIT_DEV_DOMAIN} pnpm ...'` so
-  the public URL is injected for Magnific asset fetches; the web
-  artifact's `[services.env]` supplies `PORT=18134` and `BASE_PATH=/`.
-- **Fully autonomous pipeline** (`jobs/handlers.ts`): when the user
-  submits the create-project wizard, `CreateProject.handleSubmit` POSTs
-  to `/story-bible/generate` once. From there, every stage handler
-  enqueues the next stage on success — `story_bible_generate ➜
-  character_generate ➜ storyboard_generate ➜ visualization_generate ➜
-  production_pipeline`. The user does not click any "Generate" button
-  to advance the pipeline; only `production/start`,
-  `story-bible/approve`, and `characters/approve-lock` remain as
-  optional manual gates.
-- **Credit-saving idempotency** (`services/queue.ts` +
-  `routes/projects.ts`): all auto-chain enqueues use the new
-  `enqueueStageOnce({ projectId, type, ... })` helper which checks
-  `findInflightStage(projectId, type)` first. If a same-(project,type)
-  task is in `queued|in_progress|processing|paused`, the existing task
-  is returned and no new task is created. Manual generate routes
-  (`story-bible/generate`, `characters/generate`,
-  `storyboard/generate`, `visualization/generate`,
-  `production/start`) call `findInflightStage` BEFORE
-  `debitCredits(...)` and short-circuit with HTTP 202
-  `{ deduped: true }` when an in-flight task exists, preventing
-  double-debit on double-clicks. After a stage completes,
-  `enqueueStageOnce` does NOT use a stable idempotency key, so a fresh
-  manual click after completion legitimately starts a new run. Race-free
-  in our single-Node + better-sqlite (synchronous) runtime; would need a
-  DB-level uniqueness constraint if horizontally scaled.
-- **Exact-duration selector + parallelized image generation**
-  (`routes/projects.ts`, `jobs/handlers.ts`, `services/visualizationDirector.ts`,
-  `lib/concurrency.ts`, `pages/app/CreateProject.tsx`):
-  - The wizard now exposes per-format duration buttons
-    (short: 1/2/3 min · episode: 20/22/24 min · series: 3–6 episodes)
-    with per-option credit cost. The chosen `targetSeconds` is sent
-    on POST and persisted to `projects.estimated_seconds`. The route
-    also accepts both `genres[]`/`genre` and `voice`/`voiceStyle`
-    aliases — earlier the wizard's `genres` array was silently
-    dropped, leaving every project with `genre=null`.
-  - `handleStoryBible` reads `estimated_seconds` and derives a
-    target-aware scene plan: `short ≤180s` → 5–20 s × 4–15 scenes;
-    `episode ≤1800s` → 30–90 s × 12–30 scenes; `series >1800s` →
-    60–300 s × 25–40 scenes. The Claude prompt and the DB scene-insert
-    clamp both use the band, so the planner can actually hit the
-    requested target. The route caps `targetSeconds` at 12000 (the
-    band ceiling).
-  - `lib/concurrency.ts` exports `pool(items, limit, fn)` — a tiny
-    bounded-concurrency runner. `handleCharacterGenerate` runs
-    portraits in a 4-wide pool; then 3 model-sheet angles per
-    character in a 6-wide pool, each one passing the just-generated
-    portrait as `referenceUrls` so face/outfit stay on-model across
-    angles. `handleVisualization` runs scenes in a 2-wide pool, and
-    `buildVisualizationPack` does Wave 1 (`seed_frame` + `start_frame`
-    in parallel) then Wave 2 (`end_frame`/`scene_board`/`element_1`/
-    `element_2` in parallel), all of Wave 2 anchored to `start_frame`
-    so the scene's environment, lighting, and palette stay consistent
-    across all six images.
-  - `toAbsoluteUrl(...)` in both handlers and visualizationDirector
-    drops `/storage/...` refs when `PUBLIC_BASE_URL` is unset —
-    passing a relative URL the upstream image API can't fetch was
-    silently degrading consistency.
-- **Storyboard Composer** (`services/storyboardComposer.ts`,
-  `jobs/handlers.ts:handleChunkStoryboard`): every 10s `video_chunk`
-  gets ONE composite anime storyboard image (numbered grid of 6–12
-  cinematic panels with a "STORYBOARD" title) generated BEFORE the
-  video step and persisted on the chunk row alongside the planned
-  shot list. Two-phase pipeline:
-  1. **Plan**: `planChunkShots` calls Claude to break the chunk into
-     6/8/10-12 shots (slow/medium/fast pacing), each with shotType,
-     cameraAngle, description, characterAction, emotion, and
-     approxDurationSeconds. Strict JSON, defensively clamped to 6–12.
-  2. **Render**: `composeStoryboardImage` builds a single Magnific
-     prompt describing a `cols×rows` grid (auto-picked from
-     `gridForShots`), references the chunk's `start_frame_url` plus
-     up to 2 character portraits/model-sheets, and saves the result
-     to `chunks/<chunkId>/storyboard.png`.
-
-  New `video_chunks` columns (added via `db/index.ts` column
-  migrations + `schema.sql`): `storyboard_status` (pending/generating/
-  ready/failed), `storyboard_image_url`, `storyboard_shot_count`,
-  `storyboard_prompt`, `storyboard_metadata_json` (grid + pacing +
-  notes), `selected_shots_json` (full Claude shot list),
-  `storyboard_generation_model`, `storyboard_generation_time_ms`,
-  `storyboard_error_message`.
-
-  **Mandatory gating**: `handleProductionPipeline` enqueues a
-  `chunk_storyboard_generate` task per chunk and the corresponding
-  `video_chunk_generate` task carries `dependsOn: [storyboardTaskId,
-  prevVideoTaskId]` so the queue worker physically cannot start
-  video generation before the storyboard is `ready`. Belt-and-
-  suspenders: `handleVideoChunk` re-checks `storyboard_status ===
-  'ready' && storyboard_image_url` and throws otherwise.
-
-  **Wired into Kling refs**: the storyboard sheet is pushed FIRST
-  into `imageRefsApi` (highest-priority ref label "chunk storyboard
-  sheet") so it survives the 4-slot `image_urls + elements` budget
-  even when 3 character locks are present. This gives Kling-Omni-Pro
-  a per-chunk shot map that already encodes composition + characters
-  for that specific 10s beat.
-
-  **Pre-existing bug fix surfaced by this work**: the Magnific
-  nano-banana-pro endpoint now requires `mime_type` on every
-  `reference_images[]` entry (previously they accepted bare
-  `{image:b64}`). `imageProvider.ts:buildReferenceImages` now
-  emits `{image, mime_type}` with `inferMimeType` from the
-  `Content-Type` header (fallback PNG). This unblocks character
-  model sheets, scene visualizations, AND the new storyboard
-  composer — all three were silently 400-ing before.
-
-## AnimeStudioAI web — visual design system
-
-Reusable UI primitives live in `artifacts/animestudioai-web/src/components/ui/`:
-- `animated-loader.tsx` — multi-ring spinner with optional label, sizes `sm|md|lg`. Use for any loading state (data fetches, queue polling).
-- `page-header.tsx` — animated eyebrow + headline + description + optional actions row. Use as the top of every studio/admin tab so headers feel consistent.
-- `anime-poster.tsx` — image-tile button with hover scale, gradient overlay, selected ring + check badge. Supports `selected`, `disabled`, `aria-pressed`, descriptive `aria-label`. Use for any "pick one of these visual options" surface (genres, art-style cards, character thumbnails, episode pickers).
-
-Generated anime artwork lives in `attached_assets/generated_images/` and is imported via the `@assets/...` alias. Reuse existing PNGs (hero_landing, dashboard_hero, auth_splash, logo_mark, 7 genre images, 3 feature images) before generating new ones — the file is the single source of truth and re-generation costs credits.
-
-Animation conventions:
-- All `motion` cubic-bezier eases must be typed: use `ease: "easeOut" as const` (not `[0.22,...]` array) — framer-motion's strict types reject `number[]`.
-- Active-route highlight uses a single shared `layoutId="active-nav-pill"` across `mainNav` + `adminNav` in `AppShell.tsx` — only one route is active at a time so this is intentional.
-- Section reveals use `whileInView` with `viewport={{ once: true, margin: "-80px" }}` so they fire once and don't re-trigger on scroll.
+- **AI Integrations**:
+    - Anthropic Claude (via Replit AI Integrations proxy)
+    - Magnific HTTP API (defaults to Freepik base `https://api.freepik.com`)
+    - Google Gemini (optional fallback for vision)
+- **Database**: PostgreSQL (for general monorepo) and SQLite (`better-sqlite3` for `api-server`).
+- **Payment Gateway**: Razorpay
+- **Video Processing**: `ffprobe-static`, `ffmpeg-static`
+- **File Archiving**: `archiver` library

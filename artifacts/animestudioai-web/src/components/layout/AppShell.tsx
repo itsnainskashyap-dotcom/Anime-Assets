@@ -1,11 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
+import { Menu, X, ChevronLeft, ChevronRight } from "lucide-react";
 import {
-  LayoutDashboard, FolderKanban, CreditCard,
-  Settings, Bell, LogOut, Menu, X, Plus, Users,
-  Activity, ShieldAlert, MonitorPlay, ChevronLeft, ChevronRight
-} from "lucide-react";
+  PiHouseDuotone,
+  PiFolderOpenDuotone,
+  PiCreditCardDuotone,
+  PiGearSixDuotone,
+  PiBellDuotone,
+  PiSignOutDuotone,
+  PiPlusDuotone,
+  PiUsersThreeDuotone,
+  PiPulseDuotone,
+  PiShieldWarningDuotone,
+  PiMonitorPlayDuotone,
+} from "react-icons/pi";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -40,21 +49,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   const mainNav = [
-    { name: "Dashboard", href: "/app", icon: LayoutDashboard },
-    { name: "Projects", href: "/app/projects", icon: FolderKanban },
-    { name: "Billing", href: "/app/billing", icon: CreditCard },
+    { name: "Dashboard", href: "/app", icon: PiHouseDuotone },
+    { name: "Projects", href: "/app/projects", icon: PiFolderOpenDuotone },
+    { name: "Billing", href: "/app/billing", icon: PiCreditCardDuotone },
   ];
 
   const adminNav = [
-    { name: "Overview", href: "/admin", icon: Activity },
-    { name: "Users", href: "/admin/users", icon: Users },
-    { name: "Jobs", href: "/admin/jobs", icon: MonitorPlay },
-    { name: "Failures", href: "/admin/failed-generations", icon: ShieldAlert },
+    { name: "Overview", href: "/admin", icon: PiPulseDuotone },
+    { name: "Users", href: "/admin/users", icon: PiUsersThreeDuotone },
+    { name: "Jobs", href: "/admin/jobs", icon: PiMonitorPlayDuotone },
+    { name: "Failures", href: "/admin/failed-generations", icon: PiShieldWarningDuotone },
   ];
 
   const bottomNav = [
-    { name: "Notifications", href: "/app/notifications", icon: Bell },
-    { name: "Settings", href: "/app/settings", icon: Settings },
+    { name: "Notifications", href: "/app/notifications", icon: PiBellDuotone },
+    { name: "Settings", href: "/app/settings", icon: PiGearSixDuotone },
   ];
 
   const SidebarContent = () => (
@@ -82,7 +91,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <div className="px-3 space-y-1">
           <Link href="/app/projects/new">
             <Button className={`w-full justify-start ${isCollapsed ? 'px-0 justify-center' : 'gap-2'}`}>
-              <Plus className="w-4 h-4" />
+              <PiPlusDuotone className="w-4 h-4" />
               {!isCollapsed && <span>New Project</span>}
             </Button>
           </Link>
@@ -245,7 +254,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             )}
             <div className="hidden sm:flex items-center gap-2 bg-secondary/50 px-3 py-1.5 rounded-full border border-border">
-              <CreditCard className="w-4 h-4 text-primary" />
+              <PiCreditCardDuotone className="w-4 h-4 text-primary" />
               <span className="text-sm font-medium">{user?.credits.toLocaleString() ?? 0}</span>
               <span className="text-xs text-muted-foreground ml-1">Credits</span>
             </div>
@@ -272,19 +281,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <DropdownMenuSeparator />
                 <div className="sm:hidden p-2">
                   <div className="flex items-center gap-2 bg-secondary px-3 py-2 rounded-md border border-border">
-                    <CreditCard className="w-4 h-4 text-primary" />
+                    <PiCreditCardDuotone className="w-4 h-4 text-primary" />
                     <span className="text-sm font-medium">{user?.credits.toLocaleString() ?? 0} credits</span>
                   </div>
                 </div>
                 <DropdownMenuSeparator className="sm:hidden" />
                 <DropdownMenuItem asChild>
                   <Link href="/app/settings" className="cursor-pointer w-full flex items-center">
-                    <Settings className="mr-2 h-4 w-4" />
+                    <PiGearSixDuotone className="mr-2 h-4 w-4" />
                     <span>Settings</span>
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem className="text-destructive cursor-pointer" onClick={() => logout()}>
-                  <LogOut className="mr-2 h-4 w-4" />
+                  <PiSignOutDuotone className="mr-2 h-4 w-4" />
                   <span>Log out</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
