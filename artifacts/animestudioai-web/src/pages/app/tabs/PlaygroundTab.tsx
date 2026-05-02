@@ -5,11 +5,11 @@ import {
   Download, Send, Loader2, ShieldCheck, CheckCircle2, Circle,
   RadioTower, AlertTriangle, MessageSquare, ChevronDown, ChevronUp,
 } from "lucide-react";
-import { PiMagicWandDuotone, PiBookOpenDuotone, PiUsersDuotone, PiFilmScriptDuotone } from "react-icons/pi";
+import { PiMagicWandDuotone, PiBookOpenDuotone, PiUsersDuotone, PiFilmScriptDuotone, PiPencilLineDuotone, PiListBulletsDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentLog, PlaygroundEvent, Project } from "@/types/api";
 
 const LANG_FLAG: Record<string, string> = {
@@ -226,6 +226,208 @@ function ChatBubble({ event }: { event: PlaygroundEvent }) {
 /*                                MAIN COMPONENT                               */
 /* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/*                  BIBLE GENERATING VIEW (live typewriter)                    */
+/* -------------------------------------------------------------------------- */
+
+const BIBLE_PHASES = [
+  { icon: PiPencilLineDuotone,   label: "Crafting world lore and universe rules" },
+  { icon: PiUsersDuotone,        label: "Building character roster with backstories" },
+  { icon: PiFilmScriptDuotone,   label: "Structuring act arcs and scene flow" },
+  { icon: PiListBulletsDuotone,  label: "Composing scene-by-scene screenplay" },
+  { icon: PiMagicWandDuotone,    label: "Finalising tone, themes, and dialogue" },
+];
+
+function BibleGeneratingView({
+  partial,
+  langFlag,
+  langName,
+}: {
+  partial: string | null;
+  langFlag: string;
+  langName: string;
+}) {
+  const [phase, setPhase] = useState(0);
+  const [displayedChars, setDisplayedChars] = useState(0);
+  const prevPartialRef = useRef<string>("");
+  const scrollRef = useRef<HTMLPreElement>(null);
+
+  // Cycle through phases every ~8 s.
+  useEffect(() => {
+    const t = setInterval(() => setPhase((p) => (p + 1) % BIBLE_PHASES.length), 8000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Typewriter effect — animate newly arriving characters smoothly.
+  useEffect(() => {
+    if (!partial) return;
+    if (partial.length <= prevPartialRef.current.length) {
+      prevPartialRef.current = partial;
+      setDisplayedChars(partial.length);
+      return;
+    }
+    prevPartialRef.current = partial;
+    const target = partial.length;
+    const start = displayedChars;
+    const diff = target - start;
+    if (diff <= 0) return;
+    const step = Math.max(1, Math.ceil(diff / 60));
+    let cur = start;
+    const iv = setInterval(() => {
+      cur = Math.min(target, cur + step);
+      setDisplayedChars(cur);
+      if (cur >= target) clearInterval(iv);
+    }, 12);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partial]);
+
+  // Auto-scroll terminal to bottom as new tokens arrive.
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [displayedChars]);
+
+  const visibleText = partial ? partial.slice(0, displayedChars) : "";
+  const charCount = visibleText.length;
+  const wordCount = visibleText.trim() ? visibleText.trim().split(/\s+/).length : 0;
+  const CurrentPhaseIcon = BIBLE_PHASES[phase].icon;
+
+  // Extract discovered fields from partial JSON.
+  const extract = (key: string): string | null => {
+    const m = visibleText.match(new RegExp(`"${key}"\\s*:\\s*"([^"]{4,200})"`));
+    return m ? m[1] : null;
+  };
+  const discoveredTitle    = extract("title");
+  const discoveredTone     = extract("tone");
+  const discoveredSynopsis = extract("synopsis");
+  const discovered = [
+    discoveredTitle    && { label: "Title",    value: discoveredTitle,    color: "text-primary",    border: "border-primary/30",    bg: "bg-primary/5" },
+    discoveredTone     && { label: "Tone",     value: discoveredTone,     color: "text-purple-300", border: "border-purple-500/30", bg: "bg-purple-500/5" },
+    discoveredSynopsis && { label: "Synopsis", value: discoveredSynopsis, color: "text-amber-200",  border: "border-amber-500/30",  bg: "bg-amber-500/5" },
+  ].filter(Boolean) as { label: string; value: string; color: string; border: string; bg: string }[];
+
+  return (
+    <div className="space-y-4">
+      {/* Phase header */}
+      <motion.div
+        className="p-5 rounded-2xl border border-amber-500/20 bg-gradient-to-br from-amber-500/8 to-amber-500/3 relative overflow-hidden"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsl(38_92%_50%/0.12),transparent_60%)] pointer-events-none" />
+        <div className="flex items-center gap-4 relative">
+          <motion.div
+            className="w-11 h-11 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0"
+            animate={{ scale: [1, 1.06, 1] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          >
+            <CurrentPhaseIcon className="w-5 h-5 text-amber-400" />
+          </motion.div>
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-200 text-sm">Story Director is writing your bible</p>
+            <AnimatePresence mode="wait">
+              <motion.p
+                key={phase}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.3 }}
+                className="text-xs text-amber-300/70 mt-0.5"
+              >
+                {BIBLE_PHASES[phase].label}…
+              </motion.p>
+            </AnimatePresence>
+            <p className="text-[10px] text-muted-foreground/70 mt-1">
+              All descriptions in English · Voiceover lines in {langFlag} {langName}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
+            <span className="text-[10px] text-amber-400/80 uppercase tracking-wider font-medium">Live</span>
+          </div>
+        </div>
+        {/* Phase dots */}
+        <div className="flex items-center gap-2 mt-4">
+          {BIBLE_PHASES.map((_, i) => (
+            <div
+              key={i}
+              className={`h-1 rounded-full transition-all duration-500 ${i === phase ? "bg-amber-400 w-6" : i < phase ? "bg-amber-500/60 w-3" : "bg-amber-500/20 w-3"}`}
+            />
+          ))}
+        </div>
+      </motion.div>
+
+      {/* Live writing terminal */}
+      <motion.div
+        className="rounded-2xl border border-border/50 bg-[#0d0d0d] overflow-hidden"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+      >
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/30 bg-card/20">
+          <div className="flex gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-500/60" />
+            <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/60" />
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/60" />
+          </div>
+          <span className="text-[10px] text-muted-foreground/60 ml-2 font-mono uppercase tracking-widest">story_bible.json — generating</span>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-[10px] text-muted-foreground/50 font-mono">
+              {charCount.toLocaleString()} chars · {wordCount.toLocaleString()} words
+            </span>
+            <motion.span
+              className="text-[10px] text-emerald-400/70 font-mono"
+              animate={{ opacity: [1, 0.3, 1] }}
+              transition={{ duration: 1.2, repeat: Infinity }}
+            >
+              ● REC
+            </motion.span>
+          </div>
+        </div>
+        <pre
+          ref={scrollRef}
+          className="p-4 text-[11px] leading-relaxed font-mono text-emerald-300/80 overflow-y-auto max-h-72 scrollbar-none whitespace-pre-wrap break-all"
+        >
+          {visibleText || (
+            <span className="text-muted-foreground/40 italic">Waiting for Story Director to begin writing…</span>
+          )}
+          <motion.span
+            className="inline-block w-[2px] h-[13px] bg-emerald-400 ml-0.5 align-middle"
+            animate={{ opacity: [1, 0] }}
+            transition={{ duration: 0.6, repeat: Infinity, repeatType: "reverse" }}
+          />
+        </pre>
+      </motion.div>
+
+      {/* Discovered callouts */}
+      {discovered.length > 0 && (
+        <motion.div
+          className="space-y-2"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.4 }}
+        >
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 px-1">Discovered so far</p>
+          {discovered.map((item, i) => (
+            <motion.div
+              key={item.label}
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.08 }}
+              className={`px-4 py-3 rounded-xl border ${item.border} ${item.bg}`}
+            >
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/60 mb-1">{item.label}</div>
+              <div className={`text-sm font-medium leading-snug ${item.color}`}>{item.value}</div>
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
 export default function PlaygroundTab({ project }: { project: Project }) {
   const { token, api } = useAuth();
   const [events, setEvents] = useState<PlaygroundEvent[]>([]);
@@ -257,6 +459,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
     setSelectedStage(id);
   };
 
+  const queryClient = useQueryClient();
   const lang = project.language || "en";
   const langFlag = LANG_FLAG[lang] || "🌐";
   const langName = LANG_NAME[lang] || lang.toUpperCase();
@@ -268,7 +471,14 @@ export default function PlaygroundTab({ project }: { project: Project }) {
       const res = await api(`/api/projects/${project.id}/story-bible`);
       return res.json();
     },
-    staleTime: 30_000,
+    // Poll every 1.5s ONLY while the Story Director is actively streaming so
+    // the live typewriter terminal updates smoothly. Stops polling once the
+    // bible is ready/approved, AND avoids infinite polling on idle projects
+    // that have no bible row yet (status === undefined).
+    refetchInterval: (query) => {
+      const status = (query.state.data as { status?: string } | null | undefined)?.status;
+      return status === "generating" ? 1500 : false;
+    },
   });
   const { data: characters } = useQuery<{ name?: string; role?: string; backstory?: string; voiceDescription?: string; sampleDialogue?: string[] }[]>({
     queryKey: ["projects", project.id, "characters"],
@@ -343,6 +553,15 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                     created_at: raw.created_at ?? raw.ts ?? new Date().toISOString(),
                   };
                   setEvents((prev) => [...prev, normalized].slice(-200));
+                  // Invalidate the bible query the moment streaming starts/ends so the
+                  // 1.5s polling kicks in for the live typewriter terminal, and so the
+                  // ready-state UI swaps in immediately when generation finishes.
+                  if (
+                    normalized.event_type === "story_bible_generating" ||
+                    normalized.event_type === "story_bible_ready"
+                  ) {
+                    queryClient.invalidateQueries({ queryKey: ["projects", project.id, "story-bible"] });
+                  }
                 } else if (eventName === "agent_log") {
                   const raw = data as AgentLog & { agent?: string };
                   const normalized: AgentLog = {
@@ -608,21 +827,13 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                 </div>
               )}
 
-              {/* ── Bible Generating Banner — only on the story stage ────── */}
+              {/* ── Bible Generating — live typewriter terminal ─────────── */}
               {activeStage.id === "story" && bibleGenerating && !bibleReady && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="rounded-2xl border border-primary/30 bg-primary/5 p-4 flex items-center gap-3"
-                >
-                  <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground">Story Director is writing your bible…</p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      All descriptions in English · Voiceover lines in {langFlag} {langName}.
-                    </p>
-                  </div>
-                </motion.div>
+                <BibleGeneratingView
+                  partial={(bible?.partial_output as string | null | undefined) ?? null}
+                  langFlag={langFlag}
+                  langName={langName}
+                />
               )}
 
               {/* ── Story Data Panel ─────────────────────────────────── */}
