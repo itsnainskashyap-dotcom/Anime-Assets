@@ -26,6 +26,9 @@ export interface Project {
   thumbnailUrl?: string;
   createdAt: string;
   updatedAt: string;
+  story_finalized_at?: string | null;
+  storyFinalizedAt?: string | null;
+  current_stage?: string | null;
 }
 
 export interface CreateProjectInput {

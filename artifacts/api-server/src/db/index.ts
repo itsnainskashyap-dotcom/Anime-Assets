@@ -50,6 +50,9 @@ const columnMigrations: Array<[string, string, string]> = [
   ["provider_keys", "last_success_at", "TEXT"],
   ["provider_keys", "notes", "TEXT"],
   ["provider_keys", "status", "TEXT DEFAULT 'unknown'"],
+  // Story finalization gate — Section 5.3 of the V17 enhancement spec.
+  // Characters cannot be generated until the user finalizes the story.
+  ["projects", "story_finalized_at", "TEXT"],
 ];
 for (const [table, column, def] of columnMigrations) {
   try {

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Sparkles, BookOpen, Wand2, CheckCircle2, Clock, RefreshCw } from "lucide-react";
+import { Loader2, Sparkles, BookOpen, Wand2, CheckCircle2, Clock, Lock, Unlock, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
@@ -67,6 +67,16 @@ export default function StoryBibleTab({ project }: { project: Project }) {
     mutationFn: () => api(`/api/projects/${project.id}/characters/generate`, { method: "POST" }),
   });
 
+  const finalizeStory = useMutation({
+    mutationFn: () => api(`/api/projects/${project.id}/story/finalize`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", project.id] }),
+  });
+  const unfinalizeStory = useMutation({
+    mutationFn: () => api(`/api/projects/${project.id}/story/unfinalize`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", project.id] }),
+  });
+  const isFinalized = !!project.story_finalized_at;
+
   const isGenerating = bible?.status === "generating" || generateBible.isPending;
   const isReady = bible?.status === "ready" || bible?.status === "approved";
   const themes = parseThemes(bible?.themes);
@@ -105,17 +115,40 @@ export default function StoryBibleTab({ project }: { project: Project }) {
                 Generate Bible
               </Button>
             )}
-            {isReady && (
+            {isReady && !isFinalized && (
               <Button
                 size="sm"
-                variant="outline"
-                onClick={() => generateChars.mutate()}
-                disabled={generateChars.isPending}
-                className="gap-2"
+                onClick={() => finalizeStory.mutate()}
+                disabled={finalizeStory.isPending}
+                className="gap-2 bg-primary hover:bg-primary/90"
               >
-                {generateChars.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-primary" />}
-                Re-run Characters
+                {finalizeStory.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                Finalize Story
               </Button>
+            )}
+            {isReady && isFinalized && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => unfinalizeStory.mutate()}
+                  disabled={unfinalizeStory.isPending}
+                  className="gap-2"
+                >
+                  {unfinalizeStory.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlock className="w-4 h-4" />}
+                  Unlock Story
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => generateChars.mutate()}
+                  disabled={generateChars.isPending}
+                  className="gap-2"
+                >
+                  {generateChars.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-primary" />}
+                  Generate Characters
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -229,11 +262,24 @@ export default function StoryBibleTab({ project }: { project: Project }) {
               </div>
             )}
 
-            {/* Next step hint */}
-            <div className="flex items-center gap-2 text-sm text-emerald-400/80 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/10">
-              <RefreshCw className="w-4 h-4 shrink-0" />
-              Characters are being generated automatically — check the Characters tab for progress.
-            </div>
+            {/* Finalization gate hint */}
+            {!isFinalized ? (
+              <div className="flex items-start gap-3 text-sm p-4 rounded-xl bg-amber-500/5 border border-amber-500/20">
+                <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-amber-200/90">
+                  <p className="font-semibold">Character Studio is locked.</p>
+                  <p className="text-amber-200/70 mt-0.5">Review every act above, edit through the Playground chat if needed, then click <span className="font-semibold">Finalize Story</span> to unlock character generation.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-3 text-sm p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-emerald-200/90">
+                  <p className="font-semibold">Story finalized — Character Studio unlocked.</p>
+                  <p className="text-emerald-200/70 mt-0.5">You can now generate characters from the story or upload reference portraits in the Characters tab.</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

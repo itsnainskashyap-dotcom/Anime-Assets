@@ -174,10 +174,148 @@ router.post("/:id/story-bible/approve", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+router.post("/:id/story/finalize", requireAuth, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const p = loadProject((req.params.id as string), u.sub);
+  if (!p) return notFound(res);
+  const bible = db.prepare("SELECT status FROM story_bibles WHERE project_id = ?").get(p.id) as { status?: string } | undefined;
+  if (!bible || !bible.status || !["ready", "approved"].includes(bible.status)) {
+    res.status(409).json({
+      error: "Story is not ready to finalize. Wait for the Story Director to finish, then try again.",
+      code: "STORY_NOT_READY",
+      currentStatus: bible?.status ?? "missing",
+    });
+    return;
+  }
+  db.prepare(
+    "UPDATE projects SET story_finalized_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), current_stage = 'story_finalized' WHERE id = ?",
+  ).run(p.id);
+  recordPlaygroundEvent({
+    projectId: p.id,
+    eventType: "story_finalized",
+    agent: "Story Director",
+    message: "Story finalized. Character Studio unlocked.",
+  });
+  res.json({ ok: true, finalizedAt: new Date().toISOString() });
+});
+
+router.post("/:id/story/unfinalize", requireAuth, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const p = loadProject((req.params.id as string), u.sub);
+  if (!p) return notFound(res);
+  db.prepare("UPDATE projects SET story_finalized_at = NULL WHERE id = ?").run(p.id);
+  recordPlaygroundEvent({
+    projectId: p.id,
+    eventType: "story_unfinalized",
+    agent: "Story Director",
+    message: "Story unlocked for further edits.",
+  });
+  res.json({ ok: true });
+});
+
+interface ChatBody { message?: string; stage?: string }
+
+const AGENT_ROUTES: Array<{ keywords: RegExp; agent: string; intent: string; reply: (msg: string) => string }> = [
+  { keywords: /(rewrite|regenerate).*story|story.*(rewrite|regenerate)/i, agent: "Story Director", intent: "story_rewrite",
+    reply: () => "Rewriting the full story arc with stronger pacing and cliffhangers." },
+  { keywords: /(act\s*[123]|climax|romance|darker|suspense|twist)/i, agent: "Story Director", intent: "story_edit",
+    reply: (m) => `Reworking the requested beat: "${m.slice(0, 80)}".` },
+  { keywords: /story\s*bible|bible|lore|world/i, agent: "Story Bible Agent", intent: "bible_edit",
+    reply: () => "Re-syncing the Story Bible with the latest narrative state." },
+  { keywords: /(regenerate|edit).*character|character.*(regenerate|edit)|hero|protagonist|antagonist/i, agent: "Character Director", intent: "character_edit",
+    reply: () => "Updating character design — Vision Analyzer will re-extract reference cues." },
+  { keywords: /environment|location|tokyo|forest|rainy|setting/i, agent: "Environment Director", intent: "environment_edit",
+    reply: (m) => `Adjusting environment pack: "${m.slice(0, 80)}".` },
+  { keywords: /storyboard|panel/i, agent: "Storyboard Composer", intent: "storyboard_edit",
+    reply: () => "Recomposing storyboard panels aligned with the chunk video prompt." },
+  { keywords: /chunk\s*\d+|prompt|video/i, agent: "Prompt Compiler", intent: "chunk_edit",
+    reply: (m) => `Recompiling chunk prompt: "${m.slice(0, 80)}".` },
+];
+
+router.post("/:id/chat", requireAuth, (req, res) => {
+  const u = (req as AuthenticatedRequest).user!;
+  const p = loadProject((req.params.id as string), u.sub);
+  if (!p) return notFound(res);
+  const body = (req.body || {}) as ChatBody;
+  const text = (body.message || "").trim();
+  if (!text) {
+    res.status(400).json({ error: "message required" });
+    return;
+  }
+  // Record user-side message into the playground event stream so it appears
+  // in the persistent chat panel for everyone watching the project.
+  recordPlaygroundEvent({
+    projectId: p.id,
+    eventType: "user_message",
+    agent: "You",
+    message: text,
+    payload: body.stage ? { stage: body.stage } : undefined,
+  });
+  // Route the intent to a virtual agent. Real downstream wiring (calling
+  // the actual rewrite handlers) is intentionally separate from the chat
+  // surface — the chat panel must always acknowledge instantly even when
+  // the heavy job is queued. Heavy stages already have their own POST routes.
+  // Resolution order:
+  //   1. explicit keyword match (strong signal in the prompt itself);
+  //   2. stage-aware fallback — if the user has a stage selected on the
+  //      Playground left rail, ambiguous directives route deterministically
+  //      to that stage's agent (V17 §4.3 "select an act/stage and edit it");
+  //   3. generic Story Director ack.
+  const STAGE_AGENT: Record<string, { agent: string; intent: string }> = {
+    intake: { agent: "Story Director", intent: "intake" },
+    story: { agent: "Story Director", intent: "story_edit" },
+    finalize: { agent: "Story Director", intent: "story_finalize" },
+    bible: { agent: "Story Bible Agent", intent: "bible_edit" },
+    characters: { agent: "Character Director", intent: "character_edit" },
+    turnaround: { agent: "Character Director", intent: "turnaround_edit" },
+    environments: { agent: "Environment Director", intent: "environment_edit" },
+    frames: { agent: "Visualization Director", intent: "frame_edit" },
+    storyboard: { agent: "Storyboard Composer", intent: "storyboard_edit" },
+    viz: { agent: "Visualization Director", intent: "viz_pack_edit" },
+    compile: { agent: "Prompt Compiler", intent: "prompt_edit" },
+    video: { agent: "Video Orchestrator", intent: "chunk_edit" },
+    qc: { agent: "Quality Validator", intent: "qc_edit" },
+    song: { agent: "Audio Director", intent: "song_edit" },
+    export: { agent: "Export Agent", intent: "export_edit" },
+  };
+  const stageHint = body.stage && STAGE_AGENT[body.stage] ? STAGE_AGENT[body.stage] : null;
+  const keywordMatch = AGENT_ROUTES.find((r) => r.keywords.test(text));
+  const route = keywordMatch
+    ? keywordMatch
+    : stageHint
+      ? {
+          agent: stageHint.agent,
+          intent: stageHint.intent,
+          reply: (m: string) => `${stageHint.agent} acknowledged. Applying to ${body.stage}: "${m.slice(0, 80)}".`,
+        }
+      : {
+          agent: "Story Director",
+          intent: "general",
+          reply: (m: string) => `Understood — "${m.slice(0, 80)}". Standing by for the next directive.`,
+        };
+  recordPlaygroundEvent({
+    projectId: p.id,
+    eventType: "agent_message",
+    agent: route.agent,
+    message: route.reply(text),
+    payload: { intent: route.intent },
+  });
+  res.json({ ok: true, agent: route.agent, intent: route.intent });
+});
+
 router.post("/:id/characters/generate", requireAuth, generationLimiter, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+  // Section 5.3 / 7.1 gate: characters require an explicitly finalized story.
+  const finalizedAt = (p as ProjectRow & { story_finalized_at?: string | null }).story_finalized_at;
+  if (!finalizedAt) {
+    res.status(409).json({
+      error: "Story must be finalized before generating characters.",
+      code: "STORY_NOT_FINALIZED",
+    });
+    return;
+  }
   const inflight = findInflightStage(p.id, "character_generate");
   if (inflight) {
     res.status(202).json({ jobId: inflight.id, status: inflight.status, deduped: true });

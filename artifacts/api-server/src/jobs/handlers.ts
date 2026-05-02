@@ -273,16 +273,17 @@ JSON SCHEMA
   });
   setProjectStage(task.project_id, "story_bible_ready", 15);
 
-  // Auto-chain: immediately kick off character generation (dedupe in-flight to save credits)
-  if ((data.characters?.length || 0) > 0) {
-    enqueueStageOnce({
-      type: "character_generate",
-      stage: "character_generate",
-      projectId: task.project_id,
-      userId: task.user_id!,
-      payload: {},
-    });
-  }
+  // V17 §5.3 / §7.1 — Story Finalization gate.
+  // Characters MUST NOT auto-build immediately after the story bible is ready.
+  // The user must explicitly review the story and click "Finalize Story" in
+  // the UI (which sets projects.story_finalized_at). Character generation is
+  // now triggered exclusively by an authenticated POST from the user.
+  recordPlaygroundEvent({
+    projectId: task.project_id,
+    eventType: "awaiting_finalization",
+    agent: "Story Director",
+    message: "Story is ready for your review. Finalize it to unlock the Character Studio.",
+  });
 
   return { bibleId, characters: data.characters?.length || 0, scenes: data.scenes?.length || 0 };
 }
@@ -290,6 +291,17 @@ JSON SCHEMA
 // ─── CHARACTERS ──────────────────────────────────────────────────────────
 async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string, unknown>> {
   if (!task.project_id || !task.user_id) throw new Error("character_generate requires project_id + user_id");
+
+  // V17 §5.3 / §7.1 — defense-in-depth: even if a task somehow gets enqueued
+  // (legacy queue rows, admin retry, etc.) it must NOT run unless the user
+  // has explicitly finalized the story. The HTTP route also enforces this.
+  const finalRow = db
+    .prepare("SELECT story_finalized_at FROM projects WHERE id = ?")
+    .get(task.project_id) as { story_finalized_at?: string | null } | undefined;
+  if (!finalRow?.story_finalized_at) {
+    throw new Error("STORY_NOT_FINALIZED: Character generation is gated until the user finalizes the story.");
+  }
+
   setProjectStage(task.project_id, "characters", 25);
 
   const project = projectRow(task.project_id);
