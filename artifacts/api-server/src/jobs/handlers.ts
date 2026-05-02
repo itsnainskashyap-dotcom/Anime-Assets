@@ -375,8 +375,11 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
       role: string | null;
       appearance_json: string | null;
       portrait_url: string | null;
+      model_sheet_front_url: string | null;
+      model_sheet_three_quarter_url: string | null;
+      model_sheet_back_url: string | null;
     }>(
-      "SELECT id, name, role, appearance_json, portrait_url FROM characters WHERE project_id = ?",
+      "SELECT id, name, role, appearance_json, portrait_url, model_sheet_front_url, model_sheet_three_quarter_url, model_sheet_back_url FROM characters WHERE project_id = ?",
     )
     .all(task.project_id);
 
@@ -405,20 +408,38 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
 
   const generated: { id: string; name: string; portraitUrl: string }[] = [];
   let portraitFailures = 0;
+
+  // Characters that need a portrait (no portrait yet)
   const todo = characters.filter((c) => !c.portrait_url);
+  // Characters with a portrait but missing one or more model-sheet images
+  const sheetOnlyTodo = characters.filter(
+    (c) =>
+      c.portrait_url &&
+      (!c.model_sheet_front_url || !c.model_sheet_three_quarter_url || !c.model_sheet_back_url),
+  );
   const attempted = todo.length;
+
+  if (attempted === 0 && sheetOnlyTodo.length === 0) {
+    recordAgentLog({
+      projectId: task.project_id,
+      agentName: "character_director",
+      message: "All characters already have portraits and model sheets — nothing to do.",
+    });
+    setProjectStage(task.project_id, "characters_ready", 40);
+    return { generated: [], skipped: true };
+  }
 
   if (attempted === 0) {
     recordAgentLog({
       projectId: task.project_id,
       agentName: "character_director",
-      message: "All characters already have portraits — skipping image generation.",
+      message: `All portraits done — generating missing model sheets for ${sheetOnlyTodo.length} character(s).`,
     });
   } else {
     recordAgentLog({
       projectId: task.project_id,
       agentName: "character_director",
-      message: `Designing visual sheets for ${attempted} character(s) in parallel…`,
+      message: `Designing visual sheets for ${attempted} character(s) (+ ${sheetOnlyTodo.length} sheet-only retries) in parallel…`,
     });
   }
 
@@ -511,6 +532,45 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     );
   }
 
+  // ── SHEET-ONLY RETRY PASS ────────────────────────────────────────────
+  // Characters that already had portraits but were missing one or more model
+  // sheet views (e.g. previous run crashed mid-way). Generate only the missing
+  // angles — skip any that already have a URL to avoid duplicate API calls.
+  if (sheetOnlyTodo.length > 0) {
+    await pool(sheetOnlyTodo, CHAR_CONCURRENCY, async (char) => {
+      const refUrl = toAbsoluteUrl(char.portrait_url!);
+      const referenceUrls = refUrl ? [refUrl] : [];
+      const appearance = char.appearance_json ? JSON.parse(char.appearance_json) : {};
+      const sharedDesc = `${animeStyle} anime style, ${char.name}, ${char.role || "supporting character"}. Hair: ${appearance.hairColor || "dark"} ${appearance.hairStyle || ""}. Eyes: ${appearance.eyeColor || "expressive"}. Skin: ${appearance.skinTone || "natural"}. Build: ${appearance.build || "average"}. Outfit: ${appearance.outfit || "signature outfit"}. Distinguishing: ${appearance.distinguishingFeatures || ""}. Cinematic lighting, sharp linework, high quality cel-shading, no text, character isolated on neutral background.`;
+      const missingAngles = SHEET_ANGLES.filter((a) => !char[a.field]);
+      await Promise.all(missingAngles.map(async (angle) => {
+        try {
+          const img = await generateImage({
+            prompt: `${sharedDesc} ${angle.label}.`,
+            aspectRatio: angle.aspect,
+            referenceUrls,
+            userId: task.user_id!,
+            projectId: task.project_id!,
+            assetType: `characters/${char.id}`,
+            filename: `${angle.field}.png`,
+          });
+          db.prepare(
+            `UPDATE characters SET ${angle.field} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+          ).run(img.url, char.id);
+          recordPlaygroundEvent({
+            projectId: task.project_id!,
+            eventType: "character_image_ready",
+            agent: "character_director",
+            message: `${char.name}: ${angle.field.replace(/_url$/, "").replace(/_/g, " ")} ready (retry).`,
+            payload: { characterId: char.id, field: angle.field, url: img.url },
+          });
+        } catch (err) {
+          logger.error({ err, characterId: char.id, angle: angle.field }, "Sheet-only retry failed");
+        }
+      }));
+    });
+  }
+
   setProjectStage(task.project_id, "characters_ready", 40);
   recordPlaygroundEvent({
     projectId: task.project_id,
@@ -520,16 +580,9 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     payload: { generated },
   });
 
-  // Auto-chain: kick off storyboard once character generation finishes (dedupe in-flight).
-  // We enqueue even if some portraits failed — visualization can proceed with partial assets;
-  // failed portraits will simply not be available as Element references in chunk videos.
-  enqueueStageOnce({
-    type: "storyboard_generate",
-    stage: "storyboard_generate",
-    projectId: task.project_id,
-    userId: task.user_id!,
-    payload: {},
-  });
+  // NOTE: The next pipeline stages (storyboard → visualization → production)
+  // are NOT auto-chained here to prevent unintended credit consumption.
+  // The user must explicitly trigger production from the Playground tab.
 
   return { generated };
 }
