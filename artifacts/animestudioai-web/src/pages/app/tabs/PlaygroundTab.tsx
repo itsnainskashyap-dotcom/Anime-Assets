@@ -41,8 +41,8 @@ const STAGES: Stage[] = [
   { id: "story", label: "Story Director", icon: PiMagicWandDuotone, agent: "Story Director",
     description: "Drafting the full story with acts, twists and climax — JSON in English, voiceover in your chosen language.",
     matchEvent: (e) => /story_bible_(generate|generating|ready)|story_director|awaiting_finalization/i.test(e.event_type) },
-  { id: "finalize", label: "Story Finalization", icon: ShieldCheck, agent: "You + Story Director",
-    description: "Review and lock the story before character build.",
+  { id: "finalize", label: "Story Finalization", icon: ShieldCheck, agent: "Auto Pilot",
+    description: "Story is auto-finalized as soon as the bible is ready — no click required.",
     matchEvent: (e) => /story_finalized|story_unfinalized/i.test(e.event_type) },
   { id: "bible", label: "Story Bible", icon: BookOpen, agent: "Story Bible Agent",
     description: "World rules, lore, motifs and continuity constraints.",
@@ -339,17 +339,9 @@ export default function PlaygroundTab({ project }: { project: Project }) {
           Current stage: <span className="text-foreground font-medium">{activeStage.label}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {!isFinalized && stageStates.bible.status === "complete" && (
-            <Button
-              size="sm"
-              onClick={() => finalizeStory.mutate()}
-              disabled={finalizeStory.isPending}
-              className="h-7 gap-1.5 text-xs bg-primary hover:bg-primary/90"
-            >
-              {finalizeStory.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
-              Finalize Story
-            </Button>
-          )}
+          <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-300/80">
+            <ShieldCheck className="w-3 h-3" /> Auto-pilot
+          </span>
           <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
             {events.length} events · {logs.length} logs
           </div>

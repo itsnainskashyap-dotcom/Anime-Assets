@@ -12,7 +12,9 @@ import { generateVideo } from "../providers/videoProvider.js";
 import { generateMusic, generateTts, applyLipSync } from "../providers/audioProviders.js";
 import { notify } from "../services/notifications.js";
 import { validateVisual } from "../providers/visionProvider.js";
-import { enqueueTask, enqueueStageOnce, type JobTaskRow } from "../services/queue.js";
+import { enqueueTask, enqueueStageOnce, findInflightStage, type JobTaskRow } from "../services/queue.js";
+import { debitCredits } from "../services/credits.js";
+import { approveLock } from "../services/characterConsistencyLock.js";
 import { saveBuffer, STORAGE_ROOT_PATH } from "../providers/storageProvider.js";
 import { safeFetch } from "../lib/safeFetch.js";
 import { pool } from "../lib/concurrency.js";
@@ -353,17 +355,40 @@ JSON SCHEMA
   });
   setProjectStage(task.project_id, "story_bible_ready", 15);
 
-  // V17 §5.3 / §7.1 — Story Finalization gate.
-  // Characters MUST NOT auto-build immediately after the story bible is ready.
-  // The user must explicitly review the story and click "Finalize Story" in
-  // the UI (which sets projects.story_finalized_at). Character generation is
-  // now triggered exclusively by an authenticated POST from the user.
+  // FULL AUTO PIPELINE: as soon as the bible is ready, finalize the story
+  // and start character generation. No user click required — the Playground
+  // surfaces every step in real time. Users can still chat/edit and trigger
+  // a regenerate; this just removes the manual Finalize gate that used to
+  // stall the pipeline indefinitely.
+  db.prepare(
+    "UPDATE projects SET story_finalized_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), current_stage = 'story_finalized' WHERE id = ? AND story_finalized_at IS NULL",
+  ).run(task.project_id);
   recordPlaygroundEvent({
     projectId: task.project_id,
-    eventType: "awaiting_finalization",
+    eventType: "story_finalized",
     agent: "Story Director",
-    message: "Story is ready for your review. Finalize it to unlock the Character Studio.",
+    message: "Story finalized automatically — handing off to Character Director.",
   });
+
+  // Auto-enqueue characters. Debit AFTER we confirm no inflight task to
+  // avoid double-debit if the user also clicked "Finalize" concurrently.
+  if (task.user_id) {
+    const inflightChar = findInflightStage(task.project_id, "character_generate");
+    if (!inflightChar) {
+      try {
+        debitCredits(task.user_id, "character_generate", { id: task.project_id, type: "project" });
+        enqueueStageOnce({
+          type: "character_generate",
+          stage: "character_generate",
+          projectId: task.project_id,
+          userId: task.user_id,
+          payload: {},
+        });
+      } catch (err) {
+        logger.warn({ err, projectId: task.project_id }, "Auto-chain character_generate skipped");
+      }
+    }
+  }
 
   return { bibleId, characters: data.characters?.length || 0, scenes: data.scenes?.length || 0 };
 }
@@ -632,15 +657,68 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
     projectId: task.project_id,
     eventType: "characters_ready",
     agent: "character_director",
-    message: `Generated visuals for ${generated.length} characters. Click "Lock Canon Designs" to start the storyboard.`,
+    message: `Generated visuals for ${generated.length} characters — auto-locking canon designs and starting storyboard.`,
     payload: { generated },
   });
 
-  // NOTE: Storyboard auto-chain is deliberately NOT triggered here — the
-  // user may still want to upload reference images, regenerate angles, or
-  // approve canon designs first. The pipeline kicks off automatically from
-  // the /characters/approve-lock route once the user explicitly finalizes.
-  // See routes/projects.ts for that auto-trigger.
+  // FULL AUTO PIPELINE: lock all generated characters as canon and chain
+  // straight into storyboard. The user can still chat to regenerate any
+  // character; this just removes the manual "Lock Canon Designs" gate so
+  // the production runs end-to-end without human intervention.
+  try {
+    const portraits = db
+      .prepare<[string], { id: string; portrait_url: string | null }>(
+        "SELECT id, portrait_url FROM characters WHERE project_id = ? AND portrait_url IS NOT NULL",
+      )
+      .all(task.project_id);
+
+    let lockedCount = 0;
+    for (const c of portraits) {
+      try {
+        approveLock({
+          characterId: c.id,
+          approvedBy: task.user_id,
+          visualSignature: "auto",
+          referenceUrls: c.portrait_url ? [c.portrait_url] : [],
+        });
+        lockedCount += 1;
+      } catch (err) {
+        logger.warn({ err, characterId: c.id }, "Auto-lock failed for character");
+      }
+    }
+
+    setProjectStage(task.project_id, "characters_locked", 45);
+    recordPlaygroundEvent({
+      projectId: task.project_id,
+      eventType: "characters_canonized",
+      agent: "character_director",
+      message: `Canon designs locked for all ${lockedCount} character${lockedCount === 1 ? "" : "s"}.`,
+    });
+
+    const inflightSb = findInflightStage(task.project_id, "storyboard_generate");
+    if (!inflightSb) {
+      try {
+        debitCredits(task.user_id, "storyboard_generate", { id: task.project_id, type: "project" });
+        enqueueStageOnce({
+          type: "storyboard_generate",
+          stage: "storyboard_generate",
+          projectId: task.project_id,
+          userId: task.user_id,
+          payload: {},
+        });
+        recordPlaygroundEvent({
+          projectId: task.project_id,
+          eventType: "pipeline_resumed",
+          agent: "production_director",
+          message: "Storyboard pipeline auto-started.",
+        });
+      } catch (err) {
+        logger.warn({ err, projectId: task.project_id }, "Auto-chain storyboard_generate skipped");
+      }
+    }
+  } catch (err) {
+    logger.error({ err, projectId: task.project_id }, "Auto-lock characters failed");
+  }
 
   return { generated };
 }
@@ -768,7 +846,12 @@ async function handleVisualization(task: JobTaskRow): Promise<Record<string, unk
   // Build packs in parallel batches. Each scene internally already
   // parallelizes its 6 image calls, so cap scene-level concurrency to 2 to
   // avoid overwhelming the upstream image API (peak in-flight ~12 images).
-  const SCENE_CONCURRENCY = 2;
+  // V17 §6.4 — bumped from 2 → 3 for faster visualization without burning
+  // through the upstream daily image quota too quickly. Each scene runs 6
+  // image jobs (wave1+wave2); 3 scenes in parallel keeps the upstream image
+  // API happy. If nano-banana-pro hits its daily limit, imageProvider.ts
+  // automatically falls back to imagen4-ultra so the run still completes.
+  const SCENE_CONCURRENCY = 3;
   await pool(scenes, SCENE_CONCURRENCY, async (scene, idx) => {
     const pack = await buildVisualizationPack({
       projectId: task.project_id!,

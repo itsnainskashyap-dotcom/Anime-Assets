@@ -6,6 +6,23 @@ import { saveBuffer } from "./storageProvider.js";
 import { logger } from "../lib/logger.js";
 import { safeFetch } from "../lib/safeFetch.js";
 
+// Per-endpoint cooldown registry. When a Magnific image endpoint returns 429
+// (daily quota exhausted) we stop hammering it for the rest of the process
+// lifetime (or 1h, whichever ends first) and try the next endpoint in the
+// fallback chain. This prevents the entire visualization stage from failing
+// dozens of times per scene when an upstream quota is exhausted.
+const endpointCooldownUntil = new Map<string, number>();
+function endpointInCooldown(endpoint: string): boolean {
+  const until = endpointCooldownUntil.get(endpoint) || 0;
+  return Date.now() < until;
+}
+function tripEndpointCooldown(endpoint: string, reason: string): void {
+  const until = Date.now() + 60 * 60 * 1000; // 1h
+  endpointCooldownUntil.set(endpoint, until);
+  logger.warn({ endpoint, reason, until: new Date(until).toISOString() },
+    "image endpoint cooldown engaged — falling back to next provider");
+}
+
 export interface ImageRequest {
   prompt: string;
   negativePrompt?: string;
@@ -45,6 +62,12 @@ const IMAGEN4_ENDPOINT =
   process.env.MAGNIFIC_IMAGE_ENDPOINT || "/v1/ai/text-to-image/imagen4-ultra";
 const NANO_BANANA_ENDPOINT =
   process.env.MAGNIFIC_IMAGE_REFERENCE_ENDPOINT || "/v1/ai/text-to-image/nano-banana-pro";
+// Tier-3 fallback when both Imagen 4 and Nano Banana Pro hit their daily
+// quota. Seedream V4 is on a separate Magnific quota bucket so it usually
+// stays available even when the others are exhausted. Configurable via env
+// for accounts with different model entitlements.
+const SEEDREAM_ENDPOINT =
+  process.env.MAGNIFIC_IMAGE_FALLBACK2_ENDPOINT || "/v1/ai/text-to-image/seedream-v4";
 
 // ── Aspect-ratio mapping ──────────────────────────────────────────────────
 // Imagen 4 uses named string aspect ratios; nano-banana accepts the short form.
@@ -157,66 +180,97 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
   }
 
   const aspectShort = req.aspectRatio || "16:9";
-  const hasRefs = !!req.referenceUrls?.length;
+  const wantsRefs = !!req.referenceUrls?.length;
 
-  // SMART ROUTING: when references are supplied, use nano-banana-pro
-  // (supports reference_images for character consistency). Otherwise use
-  // Imagen 4 Ultra for highest text-to-image quality.
-  const endpoint = hasRefs ? NANO_BANANA_ENDPOINT : IMAGEN4_ENDPOINT;
-  const useImagen = !hasRefs;
+  // Pre-encode refs once (only used by nano-banana). If none can be encoded
+  // we still try nano-banana for quality, but log it.
+  const encodedRefs = wantsRefs ? await buildReferenceImages(req.referenceUrls!) : [];
 
-  let body: Record<string, unknown>;
-
-  if (useImagen) {
-    // Imagen 4 Ultra parameters
-    body = {
+  // Build body for a given endpoint. Nano-banana takes refs + short aspect;
+  // Imagen 4 / Seedream V4 take the named aspect map. Seedream V4 also
+  // supports the same prompt+aspect contract as Imagen 4 on Magnific.
+  function bodyFor(endpoint: string): Record<string, unknown> {
+    if (endpoint === NANO_BANANA_ENDPOINT) {
+      const b: Record<string, unknown> = { prompt: req.prompt, aspect_ratio: aspectShort };
+      if (req.negativePrompt) b.negative_prompt = req.negativePrompt;
+      if (req.numInferenceSteps) b.num_inference_steps = req.numInferenceSteps;
+      if (encodedRefs.length > 0) b.reference_images = encodedRefs;
+      return b;
+    }
+    // Imagen 4 / Seedream V4 share the Magnific text-to-image schema.
+    const b: Record<string, unknown> = {
       prompt:           req.prompt,
       aspect_ratio:     toImagen4AspectRatio(aspectShort),
       person_generation: "allow_adult",
       safety_settings:  "block_only_high",
       enhance_prompt:   true,
       language:         "en",
-      output_options: {
-        mime_type:           "image/png",
-        compression_quality: 90,
-      },
+      output_options: { mime_type: "image/png", compression_quality: 90 },
     };
     if (req.filename) {
       const numMatch = req.filename.match(/\d+/);
       if (numMatch) {
         const seed = (parseInt(numMatch[0], 10) % 4_294_967_295) || 1;
-        body.seed = seed;
+        b.seed = seed;
       }
     }
-  } else {
-    // Nano Banana Pro parameters (supports reference_images)
-    body = {
-      prompt:        req.prompt,
-      aspect_ratio:  aspectShort,
-    };
-    if (req.negativePrompt) body.negative_prompt = req.negativePrompt;
-    if (req.numInferenceSteps) body.num_inference_steps = req.numInferenceSteps;
-    const refs = await buildReferenceImages(req.referenceUrls!);
-    if (refs.length > 0) {
-      body.reference_images = refs;
-      logger.debug({ count: refs.length, endpoint },
-        "imageProvider: routing to reference-aware endpoint");
-    } else {
-      logger.warn("imageProvider: refs requested but none could be encoded; quality may suffer");
-    }
+    return b;
   }
 
-  const submit = await magnificFetch<MagnificTaskResponse>(endpoint, {
-    method: "POST",
-    body,
-  });
+  // Build the fallback chain. When refs are wanted we prefer nano-banana
+  // (only model that supports reference_images) but fall through to text-
+  // only models if it's quota-throttled. When no refs, prefer Imagen 4
+  // Ultra for top quality, then Seedream V4 as a separate-quota backup.
+  const fullChain = wantsRefs
+    ? [NANO_BANANA_ENDPOINT, IMAGEN4_ENDPOINT, SEEDREAM_ENDPOINT]
+    : [IMAGEN4_ENDPOINT, SEEDREAM_ENDPOINT];
+  const chain = fullChain.filter((e) => !endpointInCooldown(e));
+  if (chain.length === 0) {
+    // Every endpoint is in cooldown — try the full chain anyway, the user
+    // may have refilled quota since the cooldown was set.
+    chain.push(...fullChain);
+  }
+  if (wantsRefs && chain[0] !== NANO_BANANA_ENDPOINT && encodedRefs.length > 0) {
+    logger.warn({ chain }, "imageProvider: nano-banana cooled down; refs will be dropped for this image");
+  }
+
+  let submit: MagnificTaskResponse | undefined;
+  let submitEndpoint: string | undefined;
+  let lastError: unknown;
+  for (const endpoint of chain) {
+    try {
+      submit = await magnificFetch<MagnificTaskResponse>(endpoint, {
+        method: "POST",
+        body: bodyFor(endpoint),
+      });
+      submitEndpoint = endpoint;
+      break;
+    } catch (err) {
+      lastError = err;
+      const is429 = err instanceof MagnificError && err.statusCode === 429;
+      if (is429) {
+        tripEndpointCooldown(endpoint, `429 from ${endpoint}`);
+        continue; // try next tier
+      }
+      // Non-quota error — bubble up immediately.
+      throw err;
+    }
+  }
+  if (!submit || !submitEndpoint) {
+    throw lastError instanceof Error
+      ? lastError
+      : new MagnificError("All image endpoints in cooldown", 503, lastError);
+  }
 
   let imageUrls: string[] | undefined = submit.data?.generated;
   const taskId = submit.data?.task_id;
 
   if ((!imageUrls || imageUrls.length === 0) && taskId) {
+    // Poll on the SAME endpoint we submitted to — task_ids are
+    // endpoint-scoped, so polling a different cluster would 404.
+    const pollEndpoint = submitEndpoint;
     const final = await poll<MagnificTaskResponse>(
-      () => magnificFetch<MagnificTaskResponse>(`${endpoint}/${taskId}`),
+      () => magnificFetch<MagnificTaskResponse>(`${pollEndpoint}/${taskId}`),
       (v) => {
         const s = (v.data?.status || "").toUpperCase();
         if (s === "COMPLETED") return true;
@@ -241,10 +295,10 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
         assetType: req.assetType || "images",
         filename: req.filename,
       });
-      return { url: stored.url, raw: { remoteUrl, taskId, endpoint } };
+      return { url: stored.url, raw: { remoteUrl, taskId, endpoint: submitEndpoint } };
     } catch (err) {
       logger.warn({ err, remoteUrl }, "Failed to mirror image to local storage; using remote URL");
     }
   }
-  return { url: remoteUrl, raw: { taskId, endpoint } };
+  return { url: remoteUrl, raw: { taskId, endpoint: submitEndpoint } };
 }

@@ -185,6 +185,27 @@ router.post("/:id/story/finalize", requireAuth, (req, res) => {
   const u = (req as AuthenticatedRequest).user!;
   const p = loadProject((req.params.id as string), u.sub);
   if (!p) return notFound(res);
+
+  // Idempotency: if the auto-pilot already finalized the story, skip the
+  // debit + enqueue and just report the existing character job (if any).
+  // This prevents double-debit when a stale frontend or API client calls
+  // /story/finalize after handleStoryBible already auto-finalized.
+  const existing = db
+    .prepare<[string], { story_finalized_at: string | null }>(
+      "SELECT story_finalized_at FROM projects WHERE id = ?",
+    )
+    .get(p.id);
+  if (existing?.story_finalized_at) {
+    const inflight = findInflightStage(p.id, "character_generate");
+    res.json({
+      ok: true,
+      finalizedAt: existing.story_finalized_at,
+      characterJobId: inflight?.id,
+      alreadyFinalized: true,
+    });
+    return;
+  }
+
   const bible = db.prepare("SELECT status FROM story_bibles WHERE project_id = ?").get(p.id) as { status?: string } | undefined;
   if (!bible || !bible.status || !["ready", "approved"].includes(bible.status)) {
     res.status(409).json({
