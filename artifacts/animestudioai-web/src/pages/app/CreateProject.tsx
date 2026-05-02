@@ -73,6 +73,19 @@ const VOICES = [
   { id: "dark_fantasy", label: "Dark Fantasy", desc: "Gritty, magical, mature." },
 ];
 
+const LANGUAGES: { code: string; label: string; flag: string; nativeName: string }[] = [
+  { code: "en",    label: "English",    flag: "🇬🇧", nativeName: "English" },
+  { code: "hi",    label: "Hindi",      flag: "🇮🇳", nativeName: "हिंदी" },
+  { code: "hi-en", label: "Hinglish",   flag: "🇮🇳", nativeName: "Hinglish" },
+  { code: "es",    label: "Spanish",    flag: "🇪🇸", nativeName: "Español" },
+  { code: "ja",    label: "Japanese",   flag: "🇯🇵", nativeName: "日本語" },
+  { code: "ko",    label: "Korean",     flag: "🇰🇷", nativeName: "한국어" },
+  { code: "fr",    label: "French",     flag: "🇫🇷", nativeName: "Français" },
+  { code: "pt",    label: "Portuguese", flag: "🇧🇷", nativeName: "Português" },
+  { code: "zh",    label: "Chinese",    flag: "🇨🇳", nativeName: "中文" },
+  { code: "ar",    label: "Arabic",     flag: "🇸🇦", nativeName: "عربي" },
+];
+
 export default function CreateProject() {
   const [, setLocation] = useLocation();
   const { user, api } = useAuth();
@@ -87,6 +100,7 @@ export default function CreateProject() {
     genres: [] as string[],
     voice: "cinematic",
     storyPrompt: "",
+    language: "en",
   });
 
   const updateForm = <K extends keyof typeof formData>(key: K, value: (typeof formData)[K]) => {
@@ -125,6 +139,7 @@ export default function CreateProject() {
         storyPrompt: formData.storyPrompt,
         durationLabel: formData.durationLabel,
         targetSeconds: formData.targetSeconds,
+        language: formData.language,
       };
       const res = await createProject.mutateAsync(payload);
       // Auto-kick the full autonomous pipeline: story → chars → storyboard → visualization
@@ -142,7 +157,35 @@ export default function CreateProject() {
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
             <div>
               <h2 className="text-2xl font-bold mb-2">Project Basics</h2>
-              <p className="text-muted-foreground">Give your project a name and select its format.</p>
+              <p className="text-muted-foreground">Give your project a name, choose your output language, and select its format.</p>
+            </div>
+
+            {/* Language selector — shown first */}
+            <div className="space-y-3">
+              <Label>Output Language</Label>
+              <p className="text-xs text-muted-foreground -mt-1">
+                Dialogue, voiceover, and agent prompts will all use this language.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                {LANGUAGES.map(lang => (
+                  <button
+                    key={lang.code}
+                    type="button"
+                    onClick={() => updateForm("language", lang.code)}
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 text-sm font-medium transition-all text-left ${
+                      formData.language === lang.code
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border bg-card hover:border-primary/50 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <span className="text-lg leading-none">{lang.flag}</span>
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold text-xs">{lang.label}</div>
+                      <div className="truncate text-[10px] text-muted-foreground">{lang.nativeName}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
             
             <div className="space-y-4">
@@ -316,6 +359,12 @@ export default function CreateProject() {
                   <div className="text-sm text-muted-foreground mb-1">Voice</div>
                   <div className="font-medium capitalize">{formData.voice.replace('_', ' ')}</div>
                 </div>
+                <div>
+                  <div className="text-sm text-muted-foreground mb-1">Language</div>
+                  <div className="font-medium flex items-center gap-1.5">
+                    {(() => { const l = LANGUAGES.find(x => x.code === formData.language); return l ? <><span>{l.flag}</span> {l.label}</> : formData.language; })()}
+                  </div>
+                </div>
               </div>
               
               <div>
@@ -373,9 +422,9 @@ export default function CreateProject() {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
           <AnimatePresence mode="wait">
-            <div key={step}>
+            <div key={step} className="pb-6">
               {renderStep()}
             </div>
           </AnimatePresence>
@@ -417,6 +466,12 @@ export default function CreateProject() {
             
             <div className="space-y-4">
               <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-muted-foreground">Language</span>
+                  <span className="font-medium flex items-center gap-1">
+                    {(() => { const l = LANGUAGES.find(x => x.code === formData.language); return l ? <><span>{l.flag}</span> {l.label}</> : "English"; })()}
+                  </span>
+                </div>
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-muted-foreground">Estimated Time</span>
                   <span className="font-medium">~5-10 mins (setup)</span>

@@ -53,6 +53,7 @@ const columnMigrations: Array<[string, string, string]> = [
   // Story finalization gate — Section 5.3 of the V17 enhancement spec.
   // Characters cannot be generated until the user finalizes the story.
   ["projects", "story_finalized_at", "TEXT"],
+  ["projects", "language", "TEXT DEFAULT 'en'"],
 ];
 for (const [table, column, def] of columnMigrations) {
   try {

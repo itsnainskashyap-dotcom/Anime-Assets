@@ -82,12 +82,38 @@ function projectRow(projectId: string): {
   genre: string | null;
   voice_style: string | null;
   estimated_seconds: number | null;
+  language: string | null;
 } | null {
   return db
     .prepare(
-      "SELECT id, user_id, title, story_prompt, format, genre, voice_style, estimated_seconds FROM projects WHERE id = ?",
+      "SELECT id, user_id, title, story_prompt, format, genre, voice_style, estimated_seconds, language FROM projects WHERE id = ?",
     )
     .get(projectId) as ReturnType<typeof projectRow>;
+}
+
+function languageInstruction(lang: string): string {
+  switch ((lang || "en").toLowerCase()) {
+    case "hi":
+      return "Write all character dialogue lines in Hindi (Devanagari script). Character names should be Hindi/Indian. Story narration and scene descriptions should be in English but dialogue in Hindi.";
+    case "hi-en":
+      return "Write all character dialogue lines in Hinglish (Roman-script Hindi-English mix, e.g. 'Tum mere saath aaoge?' or 'Yaar, kuch toh kar!' — NOT Devanagari). Character names can be Indian or mixed cultural style.";
+    case "es":
+      return "Write all character dialogue lines in Spanish. Character names should be Spanish/Latin American. Story narration in English, dialogue in Spanish.";
+    case "ja":
+      return "Write all character dialogue lines in Japanese (romaji transliteration is fine, e.g. 'Watashi wa koko ni iru'). Character names should be Japanese. Narration in English, dialogue in Japanese.";
+    case "ko":
+      return "Write all character dialogue lines in Korean (or romanized Korean). Character names should be Korean. Narration in English, dialogue in Korean.";
+    case "fr":
+      return "Write all character dialogue lines in French. Character names can be French. Narration in English, dialogue in French.";
+    case "pt":
+      return "Write all character dialogue lines in Portuguese (Brazilian). Character names can be Portuguese/Brazilian. Narration in English, dialogue in Portuguese.";
+    case "zh":
+      return "Write all character dialogue lines in Mandarin Chinese (pinyin romanization is acceptable). Character names should be Chinese. Narration in English, dialogue in Chinese.";
+    case "ar":
+      return "Write all character dialogue lines in Arabic (romanized/transliterated is fine). Character names should be Arabic. Narration in English, dialogue in Arabic.";
+    default:
+      return "Write all character dialogue lines in English. Character names can be any cultural style appropriate to the story.";
+  }
 }
 
 function setProjectStage(projectId: string, stage: string, progress?: number): void {
@@ -119,6 +145,8 @@ async function handleStoryBible(task: JobTaskRow): Promise<Record<string, unknow
   const format = project.format || "short";
   const genre = project.genre || "shonen";
   const voiceStyle = project.voice_style || "english";
+  const projectLang = project.language || "en";
+  const langInstr = languageInstruction(projectLang);
 
   // Prefer the exact target the user picked at project creation. Fall back to
   // a sane per-format default if the column is empty (older projects).
@@ -162,7 +190,8 @@ async function handleStoryBible(task: JobTaskRow): Promise<Record<string, unknow
 INPUT
 - Working title: ${project.title}
 - Anime style/genre: ${genre}
-- Voiceover language style: ${voiceStyle}
+- Directorial voice style: ${voiceStyle}
+- Output language: ${projectLang} — ${langInstr}
 - Total target duration: about ${targetSeconds} seconds
 - User brief / story prompt:
 """

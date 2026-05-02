@@ -24,22 +24,34 @@ interface ChunkRow {
 async function planAudio(opts: {
   projectId: string;
   voiceStyle: string;
+  language: string;
   scenePrompt: string;
   sceneEmotion: string | null;
   durationSeconds: number;
   chunkNumber: number;
 }): Promise<AudioDirectorOutput> {
+  const langMap: Record<string, string> = {
+    "hi": "Hindi (Devanagari or romanized) — NOT English.",
+    "hi-en": "Hinglish (Roman-script Hindi-English mix, e.g. 'Tum mere saath aaoge?' — NOT Devanagari).",
+    "es": "Spanish.",
+    "ja": "Japanese (romaji is fine, e.g. 'Watashi wa yuku').",
+    "ko": "Korean (romanized is fine).",
+    "fr": "French.",
+    "pt": "Portuguese (Brazilian).",
+    "zh": "Mandarin Chinese (pinyin is fine).",
+    "ar": "Arabic (romanized is fine).",
+    "en": "English.",
+  };
+  const langDesc = langMap[opts.language] || langMap["en"];
   const { data } = await generateJson<AudioDirectorOutput>({
     systemPrompt:
-      "You are the Audio Director for an anime studio. For a single 10-second video chunk, plan: dialogue lines (speaker + line + start/end seconds), one BGM cue with mood + a short generation prompt, and 0–3 sound effects with timing. Voice style language: " +
-      opts.voiceStyle +
-      ". Output strict JSON only.",
+      `You are the Audio Director for an anime studio. For a single 10-second video chunk, plan: dialogue lines (speaker + line + start/end seconds), one BGM cue with mood + a short generation prompt, and 0–3 sound effects with timing. All dialogue must be written in ${langDesc} Output strict JSON only.`,
     userPrompt: `CHUNK ${opts.chunkNumber} (${opts.durationSeconds}s)
 Mood: ${opts.sceneEmotion || "cinematic"}
 Scene prompt:
 ${opts.scenePrompt.slice(0, 1500)}
 
-Voice/language: ${opts.voiceStyle}. If voiceStyle is "hindi" or "hinglish", write dialogue in Roman-script Hindi (Hinglish), e.g. "Tum mere saath aaoge?" — NOT in Devanagari.
+IMPORTANT: Write ALL dialogue lines in ${langDesc} Do not use English if the language is not English.
 
 JSON SCHEMA:
 {
@@ -70,9 +82,10 @@ export async function generateAudioForChunk(opts: { chunkId: string; userId: str
   if (!chunk) throw new Error("chunk not found");
 
   const project = db
-    .prepare<[string], { voice_style: string | null }>("SELECT voice_style FROM projects WHERE id = ?")
+    .prepare<[string], { voice_style: string | null; language: string | null }>("SELECT voice_style, language FROM projects WHERE id = ?")
     .get(opts.projectId);
   const voiceStyle = (project?.voice_style || "english").toLowerCase();
+  const projectLanguage = (project?.language || "en").toLowerCase();
 
   const scene = chunk.scene_id
     ? db
@@ -89,6 +102,7 @@ export async function generateAudioForChunk(opts: { chunkId: string; userId: str
   const plan = await planAudio({
     projectId: opts.projectId,
     voiceStyle,
+    language: projectLanguage,
     scenePrompt: chunk.prompt_text || "",
     sceneEmotion: scene?.emotion || null,
     durationSeconds: chunk.duration_seconds,
@@ -105,12 +119,18 @@ export async function generateAudioForChunk(opts: { chunkId: string; userId: str
   }
 
   const ttsUrls: string[] = [];
+  const ttsLangMap: Record<string, string> = {
+    "hi": "hi", "hi-en": "hi", "es": "es", "ja": "ja",
+    "ko": "ko", "fr": "fr", "pt": "pt", "zh": "zh", "ar": "ar", "en": "en",
+  };
+  const ttsLangDefault = ttsLangMap[projectLanguage] || "en";
   for (const line of plan.dialogue) {
     const normalized = normalizeForTts(line.line);
-    const lang = detectVoiceLanguage(line.line);
     if (!normalized) continue;
+    const detected = detectVoiceLanguage(line.line);
+    const ttsLang = detected && detected !== "en" ? ttsLangMap[detected] || ttsLangDefault : ttsLangDefault;
     try {
-      const r = await generateTts({ text: normalized, language: lang === "hi" || lang === "hi-en" ? "hi" : "en", voice: line.speaker || "default" });
+      const r = await generateTts({ text: normalized, language: ttsLang, voice: line.speaker || "default" });
       if (r.audioUrl) ttsUrls.push(r.audioUrl);
     } catch (err) {
       logger.warn({ err }, "Audio Director: TTS failed for line");

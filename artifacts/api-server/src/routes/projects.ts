@@ -49,6 +49,7 @@ router.post("/", requireAuth, (req, res) => {
     storyPrompt?: string;
     targetSeconds?: number;
     targetMinutes?: number;
+    language?: string;
   };
   if (!body.title) {
     res.status(400).json({ error: "title required" });
@@ -78,8 +79,9 @@ router.post("/", requireAuth, (req, res) => {
   // can never request a target the planner can't produce.
   targetSeconds = Math.max(10, Math.min(12000, targetSeconds));
 
+  const langValue = body.language ?? "en";
   db.prepare(
-    "INSERT INTO projects (id, user_id, title, format, genre, voice_style, story_prompt, estimated_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO projects (id, user_id, title, format, genre, voice_style, story_prompt, estimated_seconds, language) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     id,
     u.sub,
@@ -89,6 +91,7 @@ router.post("/", requireAuth, (req, res) => {
     voiceValue,
     body.storyPrompt ?? null,
     targetSeconds,
+    langValue,
   );
   db.prepare("INSERT INTO project_settings (project_id) VALUES (?)").run(id);
   loadMemory(id);
