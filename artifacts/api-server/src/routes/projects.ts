@@ -203,7 +203,25 @@ router.post("/:id/story/finalize", requireAuth, (req, res) => {
     agent: "Story Director",
     message: "Story finalized. Character Studio unlocked.",
   });
-  res.json({ ok: true, finalizedAt: new Date().toISOString() });
+
+  // Auto-trigger character generation immediately after finalization.
+  // Idempotent — if a job is already running (e.g., double-click), skip.
+  let autoJobId: string | undefined;
+  const inflightChar = findInflightStage(p.id, "character_generate");
+  if (!inflightChar) {
+    try {
+      debitCredits(u.sub, "character_generate", { id: p.id, type: "project" });
+      const charTask = enqueueGenerationStage("character_generate", p.id, u.sub, {});
+      autoJobId = charTask.id;
+    } catch {
+      // Credits exhausted or other non-fatal issue — character gen can be
+      // triggered manually from the Characters tab.
+    }
+  } else {
+    autoJobId = inflightChar.id;
+  }
+
+  res.json({ ok: true, finalizedAt: new Date().toISOString(), characterJobId: autoJobId });
 });
 
 router.post("/:id/story/unfinalize", requireAuth, (req, res) => {

@@ -183,12 +183,16 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
         </div>
         <div>
           <p className="font-semibold mb-1">Characters not yet generated</p>
-          <p className="text-sm text-muted-foreground">This happens automatically after the Story Bible completes.<br/>Or generate them, or upload a reference image to start from your own portrait.</p>
+          <p className="text-sm text-muted-foreground">
+            {isFinalized
+              ? "Click below to generate character visuals, or upload a reference image to start from your own portrait."
+              : "Finalize your story first — character generation starts automatically on finalization."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button className="gap-2" onClick={() => generateCharacters.mutate()} disabled={generateCharacters.isPending || !isFinalized}>
             {generateCharacters.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PiMagicWandDuotone className="w-4 h-4" />}
-            Generate Characters
+            {generateCharacters.isPending ? "Generating…" : "Generate Characters"}
           </Button>
           <Button
             variant="outline"
