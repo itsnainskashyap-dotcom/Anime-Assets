@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Film, LayoutDashboard, FolderKanban, CreditCard, 
-  Settings, Bell, LogOut, Menu, X, Plus, Users, 
-  Activity, ShieldAlert, MonitorPlay, ChevronLeft, ChevronRight 
+import {
+  LayoutDashboard, FolderKanban, CreditCard,
+  Settings, Bell, LogOut, Menu, X, Plus, Users,
+  Activity, ShieldAlert, MonitorPlay, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import logoMark from "@assets/generated_images/logo_mark.png";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -59,12 +60,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-sidebar border-r border-sidebar-border relative">
       <div className={`p-4 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'} border-b border-sidebar-border h-16`}>
-        <div className="flex items-center gap-2 overflow-hidden">
-          <div className="w-8 h-8 rounded bg-primary flex-shrink-0 flex items-center justify-center">
-            <Film className="w-5 h-5 text-primary-foreground" />
+        <Link href="/app">
+          <div className="flex items-center gap-2.5 overflow-hidden cursor-pointer group">
+            <motion.img
+              src={logoMark}
+              alt="AnimeStudioAI"
+              className="w-9 h-9 rounded-lg object-cover flex-shrink-0"
+              whileHover={{ rotate: -8, scale: 1.08 }}
+              transition={{ type: "spring", stiffness: 300 }}
+            />
+            {!isCollapsed && (
+              <span className="font-bold text-base tracking-tight truncate">
+                Anime<span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-400">StudioAI</span>
+              </span>
+            )}
           </div>
-          {!isCollapsed && <span className="font-bold text-lg tracking-tight truncate">AnimeStudioAI</span>}
-        </div>
+        </Link>
       </div>
 
       <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-6 scrollbar-none">
@@ -80,18 +91,35 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <div className="px-3">
           {!isCollapsed && <div className="text-xs font-semibold text-sidebar-foreground/50 mb-2 px-3 uppercase tracking-wider">Menu</div>}
           <div className="space-y-1">
-            {mainNav.map((item) => (
-              <Link key={item.name} href={item.href}>
-                <Button 
-                  variant="ghost" 
-                  className={`w-full justify-start ${location === item.href ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"} ${isCollapsed ? 'px-0 justify-center' : 'gap-3'}`}
-                  title={isCollapsed ? item.name : undefined}
+            {mainNav.map((item, i) => {
+              const isActive = location === item.href;
+              return (
+                <motion.div
+                  key={item.name}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.04 * i, duration: 0.3 }}
                 >
-                  <item.icon className="w-4 h-4" />
-                  {!isCollapsed && <span>{item.name}</span>}
-                </Button>
-              </Link>
-            ))}
+                  <Link href={item.href}>
+                    <Button
+                      variant="ghost"
+                      className={`relative w-full justify-start ${isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"} ${isCollapsed ? 'px-0 justify-center' : 'gap-3'}`}
+                      title={isCollapsed ? item.name : undefined}
+                    >
+                      {isActive && (
+                        <motion.div
+                          layoutId="active-nav-pill"
+                          className="absolute inset-0 bg-sidebar-accent rounded-md"
+                          transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                        />
+                      )}
+                      <item.icon className="w-4 h-4 relative z-10" />
+                      {!isCollapsed && <span className="relative z-10">{item.name}</span>}
+                    </Button>
+                  </Link>
+                </motion.div>
+              );
+            })}
           </div>
         </div>
 
@@ -99,18 +127,35 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="px-3">
             {!isCollapsed && <div className="text-xs font-semibold text-sidebar-foreground/50 mb-2 px-3 uppercase tracking-wider">Admin</div>}
             <div className="space-y-1">
-              {adminNav.map((item) => (
-                <Link key={item.name} href={item.href}>
-                  <Button 
-                    variant="ghost" 
-                    className={`w-full justify-start ${location.startsWith(item.href) && item.href !== '/admin' || (location === '/admin' && item.href === '/admin') ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"} ${isCollapsed ? 'px-0 justify-center' : 'gap-3'}`}
-                    title={isCollapsed ? item.name : undefined}
+              {adminNav.map((item, i) => {
+                const isActive = (location.startsWith(item.href) && item.href !== '/admin') || (location === '/admin' && item.href === '/admin');
+                return (
+                  <motion.div
+                    key={item.name}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.04 * (mainNav.length + i), duration: 0.3 }}
                   >
-                    <item.icon className="w-4 h-4" />
-                    {!isCollapsed && <span>{item.name}</span>}
-                  </Button>
-                </Link>
-              ))}
+                    <Link href={item.href}>
+                      <Button
+                        variant="ghost"
+                        className={`relative w-full justify-start ${isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"} ${isCollapsed ? 'px-0 justify-center' : 'gap-3'}`}
+                        title={isCollapsed ? item.name : undefined}
+                      >
+                        {isActive && (
+                          <motion.div
+                            layoutId="active-nav-pill"
+                            className="absolute inset-0 bg-sidebar-accent rounded-md"
+                            transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                          />
+                        )}
+                        <item.icon className="w-4 h-4 relative z-10" />
+                        {!isCollapsed && <span className="relative z-10">{item.name}</span>}
+                      </Button>
+                    </Link>
+                  </motion.div>
+                );
+              })}
             </div>
           </div>
         )}

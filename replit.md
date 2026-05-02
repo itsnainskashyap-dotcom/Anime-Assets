@@ -249,3 +249,17 @@ api-server artifact intentionally diverges from the workspace defaults:
   `Content-Type` header (fallback PNG). This unblocks character
   model sheets, scene visualizations, AND the new storyboard
   composer — all three were silently 400-ing before.
+
+## AnimeStudioAI web — visual design system
+
+Reusable UI primitives live in `artifacts/animestudioai-web/src/components/ui/`:
+- `animated-loader.tsx` — multi-ring spinner with optional label, sizes `sm|md|lg`. Use for any loading state (data fetches, queue polling).
+- `page-header.tsx` — animated eyebrow + headline + description + optional actions row. Use as the top of every studio/admin tab so headers feel consistent.
+- `anime-poster.tsx` — image-tile button with hover scale, gradient overlay, selected ring + check badge. Supports `selected`, `disabled`, `aria-pressed`, descriptive `aria-label`. Use for any "pick one of these visual options" surface (genres, art-style cards, character thumbnails, episode pickers).
+
+Generated anime artwork lives in `attached_assets/generated_images/` and is imported via the `@assets/...` alias. Reuse existing PNGs (hero_landing, dashboard_hero, auth_splash, logo_mark, 7 genre images, 3 feature images) before generating new ones — the file is the single source of truth and re-generation costs credits.
+
+Animation conventions:
+- All `motion` cubic-bezier eases must be typed: use `ease: "easeOut" as const` (not `[0.22,...]` array) — framer-motion's strict types reject `number[]`.
+- Active-route highlight uses a single shared `layoutId="active-nav-pill"` across `mainNav` + `adminNav` in `AppShell.tsx` — only one route is active at a time so this is intentional.
+- Section reveals use `whileInView` with `viewport={{ once: true, margin: "-80px" }}` so they fire once and don't re-trigger on scroll.

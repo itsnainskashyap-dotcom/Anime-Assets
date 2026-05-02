@@ -1,5 +1,88 @@
 uploads = []
-generated = []
+
+[[generated]]
+id = "65f3Lv8EXu3QG-gfb6vB-"
+uri = "file://attached_assets/generated_images/hero_landing.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "AFIuCv2qIfM2-gaAekIjB"
+uri = "file://attached_assets/generated_images/genre_action.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "UhWLptOtx14IKjK0I06fl"
+uri = "file://attached_assets/generated_images/genre_romance.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "KbgxeVI8jzpjgjIuQ3tZc"
+uri = "file://attached_assets/generated_images/genre_mecha.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "ZvcW4abjEEz-T29RArJf3"
+uri = "file://attached_assets/generated_images/genre_fantasy.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "z5WPjUjP6Q9ms6jk6hVML"
+uri = "file://attached_assets/generated_images/genre_scifi.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "rzmvWBEgiNfxHlSHIa4PE"
+uri = "file://attached_assets/generated_images/genre_slice.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "X9JgNwqDgKwBSN3fBldi0"
+uri = "file://attached_assets/generated_images/auth_splash.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "Q-1EcHr-BU09VzNPi1ivj"
+uri = "file://attached_assets/generated_images/dashboard_hero.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "q7q8E8CHR6Wc4jxJI8ssd"
+uri = "file://attached_assets/generated_images/genre_horror.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "h2zHV5Hel7Dz0SvsrQlnE"
+uri = "file://attached_assets/generated_images/logo_mark.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "v54iqpGto_B9CsgITPQXw"
+uri = "file://attached_assets/generated_images/feature_character.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "L5RMsAljaYgsKfoaFT5mv"
+uri = "file://attached_assets/generated_images/feature_storyboard.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "wau5rgLN9NauACmMGeUki"
+uri = "file://attached_assets/generated_images/feature_render.png"
+type = "image"
+title = "generated_image"
 
 [[outputs]]
 id = "3mUdqwBNQBu49CU6UmD5m"

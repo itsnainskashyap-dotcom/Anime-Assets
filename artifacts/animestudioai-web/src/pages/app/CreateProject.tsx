@@ -6,10 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
+import { AnimePoster } from "@/components/ui/anime-poster";
 import { useCreateProject } from "@/hooks/use-projects";
 import { useAuth } from "@/hooks/use-auth";
+import gAction from "@assets/generated_images/genre_action.png";
+import gRomance from "@assets/generated_images/genre_romance.png";
+import gMecha from "@assets/generated_images/genre_mecha.png";
+import gFantasy from "@assets/generated_images/genre_fantasy.png";
+import gScifi from "@assets/generated_images/genre_scifi.png";
+import gHorror from "@assets/generated_images/genre_horror.png";
+import gSlice from "@assets/generated_images/genre_slice.png";
 
 const FORMATS = [
   { id: "short", label: "Animated Short", duration: "1-3 mins", credits: 500, desc: "A self-contained cinematic short." },
@@ -38,9 +45,19 @@ const DURATION_OPTIONS: Record<string, { label: string; seconds: number; credits
   ],
 };
 
-const GENRES = [
-  "Action", "Adventure", "Fantasy", "Sci-Fi", "Cyberpunk", "Slice of Life",
-  "Romance", "Drama", "Mecha", "Mystery", "Horror", "Psychological"
+const GENRES: { name: string; img: string; caption: string }[] = [
+  { name: "Action",        img: gAction,  caption: "High-energy battles, dynamic motion." },
+  { name: "Adventure",     img: gFantasy, caption: "Long journeys, sweeping worlds." },
+  { name: "Fantasy",       img: gFantasy, caption: "Magic, myth, the impossible." },
+  { name: "Sci-Fi",        img: gScifi,   caption: "Stations, ships, alternate futures." },
+  { name: "Cyberpunk",     img: gScifi,   caption: "Neon cities, augmented humans." },
+  { name: "Mecha",         img: gMecha,   caption: "Towering robots, real stakes." },
+  { name: "Romance",       img: gRomance, caption: "Tender, slow-burn moments." },
+  { name: "Drama",         img: gRomance, caption: "Character-driven, emotional weight." },
+  { name: "Slice of Life", img: gSlice,   caption: "Cozy, warm, everyday joy." },
+  { name: "Mystery",       img: gHorror,  caption: "Hidden truths, slow reveals." },
+  { name: "Horror",        img: gHorror,  caption: "Quiet dread, ominous atmosphere." },
+  { name: "Psychological", img: gHorror,  caption: "Mind-bending, identity, paranoia." },
 ];
 
 const VOICES = [
@@ -199,24 +216,34 @@ export default function CreateProject() {
       case 2:
         return (
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
-            <div>
-              <h2 className="text-2xl font-bold mb-2">Select Genres</h2>
-              <p className="text-muted-foreground">Choose up to 3 genres that define your world.</p>
+            <div className="flex items-end justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-2xl font-bold mb-2">Pick Your Anime Type</h2>
+                <p className="text-muted-foreground">Choose up to 3 genres. The Director adapts pacing, palette, and shot language to match.</p>
+              </div>
+              <Badge variant={formData.genres.length === 0 ? "outline" : "default"} className="rounded-full">
+                {formData.genres.length}/3 selected
+              </Badge>
             </div>
-            
-            <div className="flex flex-wrap gap-3">
-              {GENRES.map(g => (
-                <button
-                  key={g}
-                  onClick={() => toggleGenre(g)}
-                  className={`px-4 py-2 rounded-full border text-sm font-medium transition-colors ${formData.genres.includes(g) ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:border-primary/50 text-foreground'}`}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-            <div className="text-sm text-muted-foreground pt-4">
-              Selected: {formData.genres.length}/3
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4" role="group" aria-label="Anime genres (choose up to 3)">
+              {GENRES.map((g, i) => {
+                const selected = formData.genres.includes(g.name);
+                const atCap = !selected && formData.genres.length >= 3;
+                return (
+                  <AnimePoster
+                    key={g.name}
+                    src={g.img}
+                    label={g.name}
+                    caption={g.caption}
+                    selected={selected}
+                    disabled={atCap}
+                    onClick={() => toggleGenre(g.name)}
+                    index={i}
+                    testId={`genre-${g.name.toLowerCase().replace(/\s+/g, "-")}`}
+                  />
+                );
+              })}
             </div>
           </motion.div>
         );
