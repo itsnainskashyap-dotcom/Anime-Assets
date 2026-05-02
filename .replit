@@ -61,8 +61,8 @@ channel = "stable-25_05"
 [userenv]
 
 [userenv.shared]
-ADMIN_EMAIL = "admin@animestudioai.local"
-ADMIN_PASSWORD = "ChangeMe!Admin2026"
+ADMIN_EMAIL = "itsnainskashyap@gmail.com"
+ADMIN_PASSWORD = "admin123"
 JWT_SECRET = "9d67bc3d1f1a007b6bdb3d5fd00aa5bd97c20dbef9048d34e370c7594865638e09db98aaa2dabf87120f91846096aed9"
 APP_ENCRYPTION_KEY = "a243f5016af4090b78e0e4c698048a8b56e84c132820519c201b42aa0ee076ba"
 DEMO_MODE = "false"
