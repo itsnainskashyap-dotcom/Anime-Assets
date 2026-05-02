@@ -192,7 +192,7 @@ JSON SCHEMA
   }],
   "scenes": [{ "sceneNumber": number, "actNumber": number, "title": string, "location": string, "timeOfDay": string, "summary": string, "shotType": string, "emotion": string, "durationSeconds": number }]
 }`,
-    maxTokens: 8192,
+    maxTokens: 32768,
   });
 
   // Persist story bible.

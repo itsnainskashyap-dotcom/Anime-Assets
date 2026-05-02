@@ -45,11 +45,21 @@ api-server artifact intentionally diverges from the workspace defaults:
   - **Text + Vision**: Anthropic Claude (`claude-sonnet-4-6`) via the Replit AI
     Integrations proxy. Reads `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` /
     `AI_INTEGRATIONS_ANTHROPIC_API_KEY`. Used for the story bible, song
-    lyrics, and chunk validation (vision).
+    lyrics, and chunk validation (vision). `textProvider.ts` calls
+    `client.messages.stream(...).finalMessage()` (NOT `messages.create`)
+    because Anthropic now requires streaming for any request that may exceed
+    the 10-minute timeout. Long JSON responses (story bible) use
+    `maxTokens: 32768` in `jobs/handlers.ts` to avoid truncation.
   - **Image / Video / Music / TTS / SFX / Lipsync / Transcription**: Magnific
     HTTP API (defaults to Freepik base `https://api.freepik.com`,
     `x-freepik-api-key` header). All endpoints are configurable via env vars
-    (`MAGNIFIC_*_ENDPOINT`). Outputs are mirrored into local `/storage` so the
+    (`MAGNIFIC_*_ENDPOINT`). The Freepik nano-banana-pro endpoint expects
+    `reference_images` as an array of `{ image: "<base64>" }` objects (not
+    bare URL strings); `imageProvider.ts` downloads each reference URL via
+    `safeFetch`, base64-encodes it, and caches the result in a small
+    URL-keyed LRU/TTL map (`refCache`, 64 entries × 10 min) to avoid
+    re-fetching the same character/anchor frame across the ~145 wave-2
+    requests per project. Outputs are mirrored into local `/storage` so the
     UI never has to hit a third-party CDN. Magnific is masked behind the
     visible name "Animax Ultra"; Claude is masked as the in-house "Story
     Director", "Character Director", etc.

@@ -79,12 +79,16 @@ export async function generateText(req: TextRequest): Promise<TextResponse> {
   return withFailover<TextResponse>("anthropic", async (key) => {
     const client = buildClient(key);
     try {
-      const message = await client.messages.create({
+      // Anthropic requires streaming for long requests (>10 min). Use the
+      // streaming API unconditionally and accumulate the final message —
+      // safer than trying to predict request duration up front.
+      const stream = client.messages.stream({
         model: CLAUDE_MODEL,
         max_tokens: req.maxTokens ?? 8192,
         system: system || undefined,
         messages: [{ role: "user", content: userContent }],
       });
+      const message = await stream.finalMessage();
       const text = extractText(message);
       return { text, raw: { model: message.model, usage: message.usage } };
     } catch (err) {
