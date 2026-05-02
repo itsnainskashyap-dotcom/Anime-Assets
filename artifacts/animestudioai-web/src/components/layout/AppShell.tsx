@@ -14,6 +14,9 @@ import {
   PiPulseDuotone,
   PiShieldWarningDuotone,
   PiMonitorPlayDuotone,
+  PiTerminalWindowDuotone,
+  PiBookOpenDuotone,
+  PiUsersDuotone,
 } from "react-icons/pi";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -28,12 +31,30 @@ import {
 } from "@/components/ui/dropdown-menu";
 import logoMark from "@assets/generated_images/logo_mark.png";
 
+// Maps language code → flag + short name for the sidebar badge.
+const LANG_META: Record<string, { flag: string; short: string }> = {
+  en: { flag: "🇬🇧", short: "EN" },
+  hi: { flag: "🇮🇳", short: "HI" },
+  "hi-en": { flag: "🇮🇳", short: "HIN" },
+  es: { flag: "🇪🇸", short: "ES" },
+  ja: { flag: "🇯🇵", short: "JA" },
+  ko: { flag: "🇰🇷", short: "KO" },
+  fr: { flag: "🇫🇷", short: "FR" },
+  pt: { flag: "🇧🇷", short: "PT" },
+  zh: { flag: "🇨🇳", short: "ZH" },
+  ar: { flag: "🇸🇦", short: "AR" },
+};
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [demoMode, setDemoMode] = useState<boolean>(false);
+
+  // Detect if user is inside a project — extract ID from path like /app/projects/:id/...
+  const projectMatch = location.match(/^\/app\/projects\/([^/]+)(?:\/|$)/);
+  const currentProjectId = projectMatch ? projectMatch[1] : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -131,6 +152,54 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             })}
           </div>
         </div>
+
+        {/* Contextual project section — shown only when inside a project */}
+        {currentProjectId && (
+          <div className="px-3">
+            {!isCollapsed && (
+              <div className="text-xs font-semibold text-sidebar-foreground/50 mb-2 px-3 uppercase tracking-wider flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                Project
+              </div>
+            )}
+            <div className="space-y-1">
+              {[
+                { label: "Story Bible", tab: "story", icon: PiBookOpenDuotone },
+                { label: "Characters", tab: "characters", icon: PiUsersDuotone },
+                { label: "Playground", tab: "playground", icon: PiTerminalWindowDuotone },
+              ].map((item, i) => {
+                const href = `/app/projects/${currentProjectId}/${item.tab}`;
+                const isActive = location === href || location.startsWith(href);
+                return (
+                  <motion.div
+                    key={item.tab}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.04 * i, duration: 0.25 }}
+                  >
+                    <Link href={href}>
+                      <Button
+                        variant="ghost"
+                        className={`relative w-full justify-start ${isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"} ${isCollapsed ? "px-0 justify-center" : "gap-3"}`}
+                        title={isCollapsed ? item.label : undefined}
+                      >
+                        {isActive && (
+                          <motion.div
+                            layoutId="active-project-pill"
+                            className="absolute inset-0 bg-primary/10 rounded-md border border-primary/20"
+                            transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                          />
+                        )}
+                        <item.icon className={`w-4 h-4 relative z-10 ${item.tab === "playground" ? "text-primary" : ""}`} />
+                        {!isCollapsed && <span className="relative z-10">{item.label}</span>}
+                      </Button>
+                    </Link>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {user?.isAdmin && (
           <div className="px-3">

@@ -182,9 +182,33 @@ async function handleStoryBible(task: JobTaskRow): Promise<Record<string, unknow
   const sceneMax = Math.min(sceneCountMax, sceneBudget + 4);
   const actMax = targetSeconds <= 120 ? 3 : targetSeconds <= 600 ? 4 : targetSeconds <= 1800 ? 5 : 8;
 
+  // Ensure the story_bibles row exists so we can UPDATE partial_output during streaming.
+  // (The route handler usually creates it, but guard for edge-cases.)
+  const existingBibleRow = db.prepare<[string], { id: string }>("SELECT id FROM story_bibles WHERE project_id = ?").get(task.project_id);
+  if (!existingBibleRow) {
+    db.prepare("INSERT INTO story_bibles (id, project_id, status) VALUES (?, ?, 'generating')").run(uuid(), task.project_id);
+  }
+
+  // Stream tokens → save partial output to DB every 1.5 s so the frontend
+  // can display a live typewriter effect while Claude is still writing.
+  let partialBuf = "";
+  let lastPartialSave = 0;
+  const onToken = (chunk: string): void => {
+    partialBuf += chunk;
+    const now = Date.now();
+    if (now - lastPartialSave > 1500) {
+      lastPartialSave = now;
+      try {
+        db.prepare("UPDATE story_bibles SET partial_output=? WHERE project_id=?")
+          .run(partialBuf, task.project_id);
+      } catch { /* non-fatal */ }
+    }
+  };
+
   const { data } = await generateJson<StoryBibleData>({
     systemPrompt:
       "You are the Story Director of an AI anime studio. Convert briefs into complete, production-ready story bibles. Be vivid and specific. Output strict JSON ONLY.",
+    onToken,
     userPrompt: `Build a complete story bible for an anime production.
 
 INPUT
@@ -199,11 +223,13 @@ ${storyPrompt}
 """
 
 REQUIREMENTS
-- Produce 2–${actMax} acts whose total estimatedDurationSeconds adds up close to ${targetSeconds}.
-- Produce 2–6 named characters with detailed appearance descriptions (hair, eyes, outfit, distinguishing features) — these will be used to lock visual consistency.
-- Produce ${sceneMin}–${sceneMax} scenes covering the full arc, each with a clear visual summary, shotType (wide/medium/closeup), location, timeOfDay, emotion, and durationSeconds (${perSceneMin}–${perSceneMax} each). The sum of scene durationSeconds MUST be within 10% of ${targetSeconds}.
-- Make sceneNumber sequential starting at 1 and assign each to an actNumber.
-- Themes: 2–4 short phrases. Synopsis: exactly 3 sentences.
+- Produce 2–${actMax} acts whose total estimatedDurationSeconds adds up to EXACTLY ${targetSeconds} (±5%).
+- Produce 2–6 named characters with FULLY DETAILED appearance (hair, eyes, outfit, distinguishing features) — visual consistency lock. Each character MUST have a sampleDialogue with 2–3 lines in the OUTPUT LANGUAGE.
+- Produce ${sceneMin}–${sceneMax} scenes covering the full arc. Each scene MUST have: visual summary, shotType (wide/medium/closeup/extreme-closeup), location, timeOfDay, emotion, durationSeconds (${perSceneMin}–${perSceneMax} each), emotionalBeats (2–3 bullet points of character internal state changes), atmosphere (lighting, sound design, mood details for the animator), and keyDialogue (1–2 lines of actual spoken dialogue in the OUTPUT LANGUAGE, in quotes).
+- The SUM of all scene durationSeconds MUST equal ${targetSeconds} (±5%). Scale scene count to fill the time budget fully — no gaps.
+- sceneNumber is sequential from 1; each scene is assigned to an actNumber.
+- Themes: 2–4 short phrases. Synopsis: exactly 3 rich sentences.
+- ALL text fields (synopsis, act summaries, scene summaries, dialogue) MUST be in the output language: ${projectLang}.
 
 JSON SCHEMA
 {
@@ -218,9 +244,13 @@ JSON SCHEMA
   "characters": [{
     "name": string, "role": string, "age": string, "personality": string[],
     "appearance": { "hairColor": string, "hairStyle": string, "eyeColor": string, "skinTone": string, "height": string, "build": string, "outfit": string, "distinguishingFeatures": string },
-    "backstory": string, "arc": string, "voiceDescription": string
+    "backstory": string, "arc": string, "voiceDescription": string, "sampleDialogue": string[]
   }],
-  "scenes": [{ "sceneNumber": number, "actNumber": number, "title": string, "location": string, "timeOfDay": string, "summary": string, "shotType": string, "emotion": string, "durationSeconds": number }]
+  "scenes": [{
+    "sceneNumber": number, "actNumber": number, "title": string, "location": string,
+    "timeOfDay": string, "summary": string, "shotType": string, "emotion": string,
+    "durationSeconds": number, "emotionalBeats": string[], "atmosphere": string, "keyDialogue": string[]
+  }]
 }`,
     maxTokens: 32768,
   });
@@ -239,6 +269,8 @@ JSON SCHEMA
       "INSERT INTO story_bibles (id, project_id, status, summary, themes, tone, arcs_json) VALUES (?, ?, 'ready', ?, ?, ?, ?)",
     ).run(bibleId, task.project_id, data.synopsis || "", JSON.stringify(data.themes || []), data.tone || "", JSON.stringify(data));
   }
+  // Clear streaming buffer — generation is complete.
+  db.prepare("UPDATE story_bibles SET partial_output=NULL WHERE project_id=?").run(task.project_id);
 
   // Persist characters (only if not already created).
   const existingChars = db

@@ -3,13 +3,23 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity, BookOpen, Users, Mountain, LayoutTemplate, Layers, Film, Music,
   Download, Send, Loader2, ShieldCheck, Lock, CheckCircle2, Circle,
-  RadioTower, BrainCircuit, AlertTriangle, MessageSquare,
+  RadioTower, BrainCircuit, AlertTriangle, MessageSquare, ChevronDown, ChevronUp,
 } from "lucide-react";
-import { PiMagicWandDuotone } from "react-icons/pi";
+import { PiMagicWandDuotone, PiBookOpenDuotone, PiUsersDuotone, PiFilmScriptDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentLog, PlaygroundEvent, Project } from "@/types/api";
+
+const LANG_FLAG: Record<string, string> = {
+  en: "🇬🇧", hi: "🇮🇳", "hi-en": "🇮🇳", es: "🇪🇸", ja: "🇯🇵",
+  ko: "🇰🇷", fr: "🇫🇷", pt: "🇧🇷", zh: "🇨🇳", ar: "🇸🇦",
+};
+const LANG_NAME: Record<string, string> = {
+  en: "English", hi: "हिंदी", "hi-en": "Hinglish", es: "Español", ja: "日本語",
+  ko: "한국어", fr: "Français", pt: "Português", zh: "中文", ar: "العربية",
+};
 
 /* -------------------------------------------------------------------------- */
 /*                              STAGE DEFINITIONS                              */
@@ -155,8 +165,40 @@ export default function PlaygroundTab({ project }: { project: Project }) {
   const [status, setStatus] = useState<"connecting" | "connected" | "reconnecting" | "error">("connecting");
   const [selectedStage, setSelectedStage] = useState<string>("story");
   const [chatInput, setChatInput] = useState("");
-  const [chatOpen, setChatOpen] = useState(false); // mobile bottom-sheet toggle
+  const [chatOpen, setChatOpen] = useState(false);
+  const [storyDataOpen, setStoryDataOpen] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const lang = project.language || "en";
+  const langFlag = LANG_FLAG[lang] || "🌐";
+  const langName = LANG_NAME[lang] || lang.toUpperCase();
+
+  /* ----- Story data queries (for rich data panel) ---------------------- */
+  const { data: bible } = useQuery<Record<string, unknown> | null>({
+    queryKey: ["projects", project.id, "story-bible"],
+    queryFn: async () => {
+      const res = await api(`/api/projects/${project.id}/story-bible`);
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+  const { data: characters } = useQuery<{ name?: string; role?: string; backstory?: string; voiceDescription?: string; sampleDialogue?: string[] }[]>({
+    queryKey: ["projects", project.id, "characters"],
+    queryFn: async () => {
+      const res = await api(`/api/projects/${project.id}/characters`);
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const bibleReady = bible && (bible.status === "ready" || bible.status === "approved");
+  const parsedBible = bibleReady && bible.arcs_json ? (() => {
+    try { return JSON.parse(bible.arcs_json as string) as Record<string, unknown>; } catch { return null; }
+  })() : null;
+  const synopsis = parsedBible ? (parsedBible.synopsis as string) || (bible?.summary as string) : (bible?.summary as string);
+  const themes = parsedBible && Array.isArray(parsedBible.themes) ? parsedBible.themes as string[] : [];
+  const acts = parsedBible && Array.isArray(parsedBible.acts) ? parsedBible.acts as { title?: string; summary?: string; estimatedDurationSeconds?: number }[] : [];
+  const scenes = parsedBible && Array.isArray(parsedBible.scenes) ? parsedBible.scenes as { sceneNumber?: number; title?: string; location?: string; emotion?: string; keyDialogue?: string[] }[] : [];
 
   /* ------------------------------ SSE pipeline ----------------------------- */
   useEffect(() => {
@@ -474,6 +516,153 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                   )}
                 </div>
               </div>
+
+              {/* ── Story Data Panel ─────────────────────────────────── */}
+              {bibleReady && (
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.15 }}
+                  className="rounded-2xl border border-border/50 bg-card/20 backdrop-blur overflow-hidden"
+                >
+                  {/* Collapsible header */}
+                  <button
+                    onClick={() => setStoryDataOpen((v) => !v)}
+                    className="w-full flex items-center gap-3 p-5 hover:bg-primary/5 transition-colors"
+                  >
+                    <PiBookOpenDuotone className="w-4 h-4 text-primary shrink-0" />
+                    <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground flex-1 text-left">
+                      Story Data
+                    </span>
+                    {/* Language badge */}
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-primary/10 border border-primary/20 text-primary rounded-full px-2 py-0.5 mr-2">
+                      {langFlag} {langName}
+                    </span>
+                    {storyDataOpen ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+                  </button>
+
+                  <AnimatePresence>
+                    {storyDataOpen && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="px-5 pb-5 space-y-4 border-t border-border/30">
+                          {/* Synopsis */}
+                          {synopsis && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 6 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="pt-4 space-y-1.5"
+                            >
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70">Synopsis</div>
+                              <p className="text-sm text-muted-foreground leading-relaxed">{synopsis}</p>
+                            </motion.div>
+                          )}
+
+                          {/* Themes */}
+                          {themes.length > 0 && (
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.05 }} className="space-y-1.5">
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70">Themes</div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {themes.map((t, i) => (
+                                  <Badge key={i} variant="outline" className="text-[10px] border-primary/30 text-primary/80">{t}</Badge>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+
+                          {/* Acts */}
+                          {acts.length > 0 && (
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.08 }} className="space-y-1.5">
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70 flex items-center gap-1.5">
+                                <PiFilmScriptDuotone className="w-3 h-3" /> Acts ({acts.length})
+                              </div>
+                              <div className="space-y-2">
+                                {acts.map((a, i) => (
+                                  <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, x: -6 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: 0.04 * i }}
+                                    className="flex gap-2.5 p-2.5 rounded-lg bg-background/30 border border-border/30"
+                                  >
+                                    <div className="w-5 h-5 rounded-full bg-primary/15 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">{i + 1}</div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-semibold truncate">{a.title}</p>
+                                      {a.summary && <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{a.summary}</p>}
+                                      {a.estimatedDurationSeconds && (
+                                        <p className="text-[10px] text-primary/60 mt-0.5">{Math.round(a.estimatedDurationSeconds / 60)}m {a.estimatedDurationSeconds % 60}s</p>
+                                      )}
+                                    </div>
+                                  </motion.div>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+
+                          {/* Characters */}
+                          {characters && characters.length > 0 && (
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} className="space-y-1.5">
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70 flex items-center gap-1.5">
+                                <PiUsersDuotone className="w-3 h-3" /> Characters ({characters.length})
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {characters.map((c, i) => (
+                                  <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, scale: 0.96 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    transition={{ delay: 0.05 * i }}
+                                    className="p-2.5 rounded-lg bg-background/30 border border-border/30 space-y-1"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-5 h-5 rounded-full bg-primary/15 flex items-center justify-center text-primary text-[9px] font-bold shrink-0">
+                                        {c.name?.charAt(0) || "?"}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-semibold truncate">{c.name}</p>
+                                        {c.role && <p className="text-[9px] text-muted-foreground uppercase tracking-wide">{c.role}</p>}
+                                      </div>
+                                    </div>
+                                    {c.sampleDialogue && c.sampleDialogue[0] && (
+                                      <p className="text-[10px] text-amber-300/70 italic line-clamp-2">"{c.sampleDialogue[0]}"</p>
+                                    )}
+                                  </motion.div>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+
+                          {/* Scenes count + sample */}
+                          {scenes.length > 0 && (
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.12 }} className="space-y-1.5">
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                                Scenes ({scenes.length} total)
+                              </div>
+                              <div className="space-y-1.5">
+                                {scenes.slice(0, 4).map((s, i) => (
+                                  <div key={i} className="flex gap-2 text-[10px]">
+                                    <span className="text-primary/60 shrink-0 font-mono w-4">{s.sceneNumber ?? i + 1}.</span>
+                                    <span className="text-muted-foreground truncate">{s.title}</span>
+                                    {s.emotion && <Badge variant="outline" className="text-[9px] border-amber-500/20 text-amber-400/70 shrink-0">{s.emotion}</Badge>}
+                                  </div>
+                                ))}
+                                {scenes.length > 4 && (
+                                  <p className="text-[10px] text-muted-foreground/60 italic">+{scenes.length - 4} more scenes…</p>
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
+              )}
             </motion.div>
           </AnimatePresence>
         </main>

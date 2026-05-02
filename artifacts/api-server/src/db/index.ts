@@ -54,6 +54,9 @@ const columnMigrations: Array<[string, string, string]> = [
   // Characters cannot be generated until the user finalizes the story.
   ["projects", "story_finalized_at", "TEXT"],
   ["projects", "language", "TEXT DEFAULT 'en'"],
+  // Live streaming of Claude tokens during story bible generation — lets the
+  // frontend show a real-time typewriter effect while waiting for the job.
+  ["story_bibles", "partial_output", "TEXT"],
 ];
 for (const [table, column, def] of columnMigrations) {
   try {

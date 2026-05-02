@@ -29,6 +29,10 @@ export interface Project {
   story_finalized_at?: string | null;
   storyFinalizedAt?: string | null;
   current_stage?: string | null;
+  language?: string | null;
+  estimated_seconds?: number | null;
+  genre?: string | null;
+  voice_style?: string | null;
 }
 
 export interface CreateProjectInput {

@@ -16,6 +16,8 @@ export interface TextRequest {
   schema?: string;
   jsonOnly?: boolean;
   imageUrls?: string[];
+  /** Called for every streamed token chunk so callers can save progress. */
+  onToken?: (chunk: string) => void;
 }
 
 export interface TextResponse {
@@ -88,6 +90,11 @@ export async function generateText(req: TextRequest): Promise<TextResponse> {
         system: system || undefined,
         messages: [{ role: "user", content: userContent }],
       });
+      // Forward tokens to the caller for live progress saving / UI streaming.
+      if (req.onToken) {
+        const cb = req.onToken;
+        stream.on("text", (text: string) => { cb(text); });
+      }
       const message = await stream.finalMessage();
       const text = extractText(message);
       return { text, raw: { model: message.model, usage: message.usage } };
