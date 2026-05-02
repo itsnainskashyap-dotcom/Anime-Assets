@@ -36,16 +36,17 @@ function parseAppearance(raw: string | undefined): Appearance {
   try { return JSON.parse(raw) as Appearance; } catch { return {}; }
 }
 
-function PortraitCard({ url, label, isPortrait, portraitReady }: {
+function PortraitCard({ url, label, isReference, portraitReady, tall }: {
   url?: string | null;
   label: string;
-  isPortrait?: boolean;
+  isReference?: boolean;
   portraitReady?: boolean;
+  tall?: boolean;
 }) {
-  const generating = !url && (isPortrait || portraitReady);
+  const generating = !url && (isReference || portraitReady);
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="aspect-square rounded-xl border border-border/50 bg-card/50 overflow-hidden flex items-center justify-center relative">
+      <div className={`${tall ? "aspect-[9/16]" : "aspect-[9/16]"} rounded-xl border border-border/50 bg-card/50 overflow-hidden flex items-center justify-center relative`}>
         {url ? (
           <motion.img
             key={url}
@@ -313,17 +314,17 @@ export default function CharacterStudioTab({ project }: { project: Project }) {
               </div>
               {selected.portrait_url && (
                 <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 gap-1">
-                  <ShieldCheck className="w-3 h-3" /> Portrait Ready
+                  <ShieldCheck className="w-3 h-3" /> Full Body Ready
                 </Badge>
               )}
             </div>
 
-            {/* Portrait + Model sheets */}
+            {/* Full Body Reference + 3 angle views */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <PortraitCard url={selected.portrait_url} label="Portrait" isPortrait />
-              <PortraitCard url={selected.model_sheet_front_url}         label="Front View"   portraitReady={!!selected.portrait_url} />
-              <PortraitCard url={selected.model_sheet_three_quarter_url} label="¾ View"       portraitReady={!!selected.portrait_url} />
-              <PortraitCard url={selected.model_sheet_back_url}          label="Back View"    portraitReady={!!selected.portrait_url} />
+              <PortraitCard url={selected.portrait_url}                  label="Full Body Ref" isReference />
+              <PortraitCard url={selected.model_sheet_front_url}         label="Front View"    portraitReady={!!selected.portrait_url} />
+              <PortraitCard url={selected.model_sheet_three_quarter_url} label="¾ View"        portraitReady={!!selected.portrait_url} />
+              <PortraitCard url={selected.model_sheet_back_url}          label="Back View"     portraitReady={!!selected.portrait_url} />
             </div>
 
             {/* Description + Appearance */}

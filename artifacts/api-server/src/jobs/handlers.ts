@@ -444,33 +444,51 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
   }
 
   // ── PIPELINED character generation ────────────────────────────────────
-  // For each character: generate the portrait THEN immediately kick off all
-  // 3 model-sheet angles in parallel using that portrait as a reference image.
-  // Running multiple character pipelines concurrently (up to CHAR_CONCURRENCY)
-  // means Character 1's sheets can start while Character 2's portrait is still
-  // generating — user sees fully-complete character cards appearing one by one.
-  const CHAR_CONCURRENCY = 2; // portrait + up to 3 sheets per char = max 8 concurrent
+  // FLOW (per character):
+  //   Step 1 → Full body standing reference image (portrait_url). This is
+  //             the MASTER reference — generated first at the highest quality.
+  //   Step 2 → Front view, ¾ view, back view — ALL generated in parallel,
+  //             each using the full body reference image as their input so the
+  //             AI maintains exact face/hair/outfit/proportions consistency.
+  //
+  // Up to CHAR_CONCURRENCY character pipelines run in parallel so the user
+  // sees complete character sets (all 4 images) appearing one by one.
+  const CHAR_CONCURRENCY = 2;
+
+  // Highest quality: use maximum inference steps for the nano-banana-pro model.
+  const HIGH_QUALITY_STEPS = 4;
 
   const SHEET_ANGLES: Array<{
     field: "model_sheet_front_url" | "model_sheet_three_quarter_url" | "model_sheet_back_url";
     label: string;
-    aspect: string;
   }> = [
-    { field: "model_sheet_front_url",           label: "full body, front view, neutral standing pose, EXACT same face, hair, outfit and proportions as the reference portrait above",        aspect: "9:16" },
-    { field: "model_sheet_three_quarter_url",   label: "full body, three-quarter side view, neutral standing pose, EXACT same face, hair, outfit and proportions as the reference portrait above", aspect: "9:16" },
-    { field: "model_sheet_back_url",            label: "full body, back view, neutral standing pose, EXACT same hair, outfit and proportions as the reference portrait above",                aspect: "9:16" },
+    {
+      field: "model_sheet_front_url",
+      label: "anime character model sheet — FRONT VIEW, full body from head to toe, neutral T-pose, arms slightly away from body, facing camera directly, IDENTICAL face, hair color, hair style, eye color, skin tone, outfit and body proportions as the reference character image",
+    },
+    {
+      field: "model_sheet_three_quarter_url",
+      label: "anime character model sheet — THREE-QUARTER VIEW (45° rotation), full body from head to toe, relaxed standing pose, IDENTICAL face, hair color, hair style, eye color, skin tone, outfit and body proportions as the reference character image",
+    },
+    {
+      field: "model_sheet_back_url",
+      label: "anime character model sheet — BACK VIEW, full body from head to toe, neutral standing pose, showing the back of the character, IDENTICAL hair color, hair style, outfit, body shape and proportions as the reference character image",
+    },
   ];
 
   await pool(todo, CHAR_CONCURRENCY, async (char) => {
     const appearance = char.appearance_json ? JSON.parse(char.appearance_json) : {};
-    const sharedDesc = `${animeStyle} anime style, ${char.name}, ${char.role || "supporting character"}. Hair: ${appearance.hairColor || "dark"} ${appearance.hairStyle || ""}. Eyes: ${appearance.eyeColor || "expressive"}. Skin: ${appearance.skinTone || "natural"}. Build: ${appearance.build || "average"}. Outfit: ${appearance.outfit || "signature outfit"}. Distinguishing: ${appearance.distinguishingFeatures || ""}. Cinematic lighting, sharp linework, high quality cel-shading, no text, character isolated on neutral background.`;
+    const sharedDesc = `${animeStyle} anime style. Character: ${char.name} (${char.role || "supporting character"}). Hair: ${appearance.hairColor || "dark"} ${appearance.hairStyle || ""}. Eyes: ${appearance.eyeColor || "expressive"}. Skin: ${appearance.skinTone || "natural"}. Build: ${appearance.build || "average"}. Outfit: ${appearance.outfit || "signature outfit"}. Distinguishing features: ${appearance.distinguishingFeatures || "none"}. Art style: cinematic lighting, sharp cel-shading linework, high-detail anime illustration, clean neutral background, no text, no watermarks.`;
 
-    // ── Step 1: Portrait ─────────────────────────────────────────────────
-    let portraitUrl: string | null = null;
+    // ── Step 1: Full Body Reference Image ────────────────────────────────
+    // This is generated FIRST and becomes the master reference that all
+    // subsequent views must match exactly.
+    let fullBodyUrl: string | null = null;
     try {
       const img = await generateImage({
-        prompt: `${sharedDesc} expressive portrait, head and shoulders, looking directly forward, clean neutral background.`,
-        aspectRatio: "1:1",
+        prompt: `${sharedDesc} FULL BODY CHARACTER REFERENCE SHEET — complete figure from head to toe, front-facing, neutral standing pose, arms relaxed at sides, full anatomy visible including feet, highest detail, used as the canonical design reference for this character.`,
+        aspectRatio: "9:16",
+        numInferenceSteps: HIGH_QUALITY_STEPS,
         userId: task.user_id!,
         projectId: task.project_id!,
         assetType: `characters/${char.id}`,
@@ -483,27 +501,28 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
         projectId: task.project_id!,
         eventType: "character_image_ready",
         agent: "character_director",
-        message: `${char.name}: portrait ready.`,
+        message: `${char.name}: full body reference ready.`,
         payload: { characterId: char.id, field: "portrait_url", url: img.url },
       });
       generated.push({ id: char.id, name: char.name, portraitUrl: img.url });
-      portraitUrl = img.url;
+      fullBodyUrl = img.url;
     } catch (err) {
-      logger.error({ err, characterId: char.id, angle: "portrait_url" }, "Character portrait generation failed");
+      logger.error({ err, characterId: char.id, angle: "portrait_url" }, "Character full body generation failed");
       portraitFailures++;
-      return; // Skip model sheets if portrait failed
+      return; // Cannot generate views without the reference
     }
 
-    // ── Step 2: 3 model-sheet angles in parallel using portrait as ref ───
-    // The portrait is fetched once, base64-encoded, and cached by buildReferenceImages.
-    const refUrl = toAbsoluteUrl(portraitUrl);
+    // ── Step 2: 3 angle views in parallel, ALL referencing the full body ─
+    // The full body is base64-encoded once (LRU-cached) and reused for all 3.
+    const refUrl = toAbsoluteUrl(fullBodyUrl);
     const referenceUrls = refUrl ? [refUrl] : [];
 
     await Promise.all(SHEET_ANGLES.map(async (angle) => {
       try {
         const img = await generateImage({
           prompt: `${sharedDesc} ${angle.label}.`,
-          aspectRatio: angle.aspect,
+          aspectRatio: "9:16",
+          numInferenceSteps: HIGH_QUALITY_STEPS,
           referenceUrls,
           userId: task.user_id!,
           projectId: task.project_id!,
@@ -521,7 +540,7 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
           payload: { characterId: char.id, field: angle.field, url: img.url },
         });
       } catch (err) {
-        logger.error({ err, characterId: char.id, angle: angle.field }, "Character model-sheet generation failed");
+        logger.error({ err, characterId: char.id, angle: angle.field }, "Character view generation failed");
       }
     }));
   });
@@ -547,7 +566,8 @@ async function handleCharacterGenerate(task: JobTaskRow): Promise<Record<string,
         try {
           const img = await generateImage({
             prompt: `${sharedDesc} ${angle.label}.`,
-            aspectRatio: angle.aspect,
+            aspectRatio: "9:16",
+            numInferenceSteps: HIGH_QUALITY_STEPS,
             referenceUrls,
             userId: task.user_id!,
             projectId: task.project_id!,

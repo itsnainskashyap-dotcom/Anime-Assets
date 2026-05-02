@@ -12,6 +12,8 @@ export interface ImageRequest {
   referenceUrls?: string[];
   aspectRatio?: string;
   model?: string;
+  /** Pass num_inference_steps to the upstream API for higher quality output. */
+  numInferenceSteps?: number;
   userId?: string;
   projectId?: string;
   assetType?: string;
@@ -147,6 +149,7 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
     aspect_ratio: aspect,
   };
   if (req.negativePrompt) body.negative_prompt = req.negativePrompt;
+  if (req.numInferenceSteps) body.num_inference_steps = req.numInferenceSteps;
   if (req.referenceUrls && req.referenceUrls.length > 0) {
     const refs = await buildReferenceImages(req.referenceUrls);
     if (refs.length > 0) body.reference_images = refs;
