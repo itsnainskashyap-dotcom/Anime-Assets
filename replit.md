@@ -76,3 +76,11 @@ The web artifact (`artifacts/animestudioai-web`) uses reusable UI primitives for
 - **Payment Gateway**: Razorpay
 - **Video Processing**: `ffprobe-static`, `ffmpeg-static`
 - **File Archiving**: `archiver` library
+
+# Recent Feature Additions
+
+- **Auto-Tab Navigation** (`ProjectDetail.tsx`): After story finalization, the UI automatically navigates to the "Characters" tab. As pipeline stages complete, the tab advances to match the current stage. A `userNavigatedRef` prevents the system from overriding manual user navigation. Animated toast notifications appear on auto-advance.
+- **Repair AI Agent** (`artifacts/api-server/scripts/repairAgent.mjs`): Autonomous multi-agent code self-healing service running as its own workflow. 5-agent pipeline: Watcher (polls `agent_activity_logs` every 30s for errors) → Analyzer (Claude identifies affected files) → Fixer (Claude writes patches) → Validator (tsc --noEmit check) → Applier (writes files and restarts workflow). Rate-limited to 8 fixes/hour. Logs to `data/repair-log.jsonl`. Only modifies `.ts`/`.tsx` files inside `artifacts/`.
+- **Character Generation**: Full-body 9:16 portrait as primary reference; 3 model sheets (front, three-quarter, back) also 9:16. HIGH_QUALITY_STEPS=4. All 4 images required before character is locked.
+- **Story Bible Localization**: JSON structural fields in English; sampleDialogue + keyDialogue in selected voiceover language only.
+- **Playground Events**: `character_generate`, `character_generated`, `character_sheet_ready`, `character_locked` events fire at correct pipeline stages.
