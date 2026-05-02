@@ -261,21 +261,97 @@ router.post("/:id/story/unfinalize", requireAuth, (req, res) => {
 
 interface ChatBody { message?: string; stage?: string }
 
-const AGENT_ROUTES: Array<{ keywords: RegExp; agent: string; intent: string; reply: (msg: string) => string }> = [
-  { keywords: /(rewrite|regenerate).*story|story.*(rewrite|regenerate)/i, agent: "Story Director", intent: "story_rewrite",
-    reply: () => "Rewriting the full story arc with stronger pacing and cliffhangers." },
-  { keywords: /(act\s*[123]|climax|romance|darker|suspense|twist)/i, agent: "Story Director", intent: "story_edit",
-    reply: (m) => `Reworking the requested beat: "${m.slice(0, 80)}".` },
-  { keywords: /story\s*bible|bible|lore|world/i, agent: "Story Bible Agent", intent: "bible_edit",
-    reply: () => "Re-syncing the Story Bible with the latest narrative state." },
-  { keywords: /(regenerate|edit).*character|character.*(regenerate|edit)|hero|protagonist|antagonist/i, agent: "Character Director", intent: "character_edit",
-    reply: () => "Updating character design — Vision Analyzer will re-extract reference cues." },
-  { keywords: /environment|location|tokyo|forest|rainy|setting/i, agent: "Environment Director", intent: "environment_edit",
-    reply: (m) => `Adjusting environment pack: "${m.slice(0, 80)}".` },
-  { keywords: /storyboard|panel/i, agent: "Storyboard Composer", intent: "storyboard_edit",
-    reply: () => "Recomposing storyboard panels aligned with the chunk video prompt." },
-  { keywords: /chunk\s*\d+|prompt|video/i, agent: "Prompt Compiler", intent: "chunk_edit",
-    reply: (m) => `Recompiling chunk prompt: "${m.slice(0, 80)}".` },
+/**
+ * Chat → real action mapping.
+ *
+ * When the user types something that matches a regenerate-style keyword,
+ * we actually enqueue the corresponding pipeline stage instead of just
+ * recording an empty acknowledgment. The chat surface stays instant —
+ * the heavy work happens in the queue.
+ *
+ * `action` returns either a plain reply (no job triggered, still useful
+ * as a directive log) or `{ reply, stageType }` to enqueue a real job.
+ */
+type ChatActionResult =
+  | { reply: string }
+  | { reply: string; stageType: string; payload?: Record<string, unknown> };
+
+const AGENT_ROUTES: Array<{
+  keywords: RegExp;
+  agent: string;
+  intent: string;
+  action: (msg: string) => ChatActionResult;
+}> = [
+  // Order matters: more specific keywords first so "storyboard" beats "story".
+  {
+    keywords: /(rewrite|regenerate|redo|recompose)\s*(the\s*)?(storyboard|panels)\b/i,
+    agent: "Storyboard Composer",
+    intent: "storyboard_regenerate",
+    action: () => ({
+      reply: "Recomposing the storyboard — splitting scenes into fresh 10-second chunks.",
+      stageType: "storyboard_generate",
+    }),
+  },
+  {
+    keywords: /(rewrite|regenerate|redo)\s*(the\s*)?(visualization|viz|frames|stills|scene\s*boards?)\b/i,
+    agent: "Visualization Director",
+    intent: "visualization_regenerate",
+    action: () => ({
+      reply: "Regenerating the visualization pack — start/end frames and scene boards anchored on canon characters.",
+      stageType: "visualization_generate",
+    }),
+  },
+  {
+    keywords: /(rewrite|regenerate|redo)\s*(the\s*)?(characters?|cast|hero|protagonist)\b/i,
+    agent: "Character Director",
+    intent: "character_regenerate",
+    action: () => ({
+      reply: "Regenerating every character — full body portraits + 3-angle turnaround sheets.",
+      stageType: "character_generate",
+    }),
+  },
+  {
+    keywords: /(rewrite|regenerate|redo|new)\s*(the\s*)?(story|bible|plot|narrative)\b/i,
+    agent: "Story Director",
+    intent: "story_regenerate",
+    action: () => ({
+      reply: "Restarting the Story Director — generating a fresh story bible from your premise.",
+      stageType: "story_bible_generate",
+    }),
+  },
+  // Conversational beats — logged as a directive but no job triggered.
+  {
+    keywords: /(act\s*[123]|climax|romance|darker|lighter|suspense|twist|pacing|tone)/i,
+    agent: "Story Director",
+    intent: "story_note",
+    action: (m) => ({
+      reply: `Logged your story note — "${m.slice(0, 80)}". I'll apply it on the next story regenerate.`,
+    }),
+  },
+  {
+    keywords: /story\s*bible|bible|lore|world/i,
+    agent: "Story Bible Agent",
+    intent: "bible_note",
+    action: () => ({
+      reply: "Noted. Use \"regenerate the story\" if you want me to rewrite the bible from scratch.",
+    }),
+  },
+  {
+    keywords: /character|hero|protagonist|antagonist|villain/i,
+    agent: "Character Director",
+    intent: "character_note",
+    action: (m) => ({
+      reply: `Logged character note — "${m.slice(0, 80)}". Use "regenerate the characters" to apply.`,
+    }),
+  },
+  {
+    keywords: /environment|location|setting|forest|tokyo|rainy/i,
+    agent: "Visualization Director",
+    intent: "environment_note",
+    action: (m) => ({
+      reply: `Logged environment note — "${m.slice(0, 80)}". This will feed into the next visualization regenerate.`,
+    }),
+  },
 ];
 
 router.post("/:id/chat", requireAuth, (req, res) => {
@@ -307,46 +383,86 @@ router.post("/:id/chat", requireAuth, (req, res) => {
   //      Playground left rail, ambiguous directives route deterministically
   //      to that stage's agent (V17 §4.3 "select an act/stage and edit it");
   //   3. generic Story Director ack.
-  const STAGE_AGENT: Record<string, { agent: string; intent: string }> = {
-    intake: { agent: "Story Director", intent: "intake" },
-    story: { agent: "Story Director", intent: "story_edit" },
-    finalize: { agent: "Story Director", intent: "story_finalize" },
-    bible: { agent: "Story Bible Agent", intent: "bible_edit" },
-    characters: { agent: "Character Director", intent: "character_edit" },
-    turnaround: { agent: "Character Director", intent: "turnaround_edit" },
-    environments: { agent: "Environment Director", intent: "environment_edit" },
-    frames: { agent: "Visualization Director", intent: "frame_edit" },
-    storyboard: { agent: "Storyboard Composer", intent: "storyboard_edit" },
-    viz: { agent: "Visualization Director", intent: "viz_pack_edit" },
-    compile: { agent: "Prompt Compiler", intent: "prompt_edit" },
-    video: { agent: "Video Orchestrator", intent: "chunk_edit" },
-    qc: { agent: "Quality Validator", intent: "qc_edit" },
-    song: { agent: "Audio Director", intent: "song_edit" },
-    export: { agent: "Export Agent", intent: "export_edit" },
+  // Stage-aware fallback for ambiguous directives. The 6 UI stages map to
+  // a default agent so a chat sent while viewing "characters" routes to the
+  // Character Director by default.
+  const STAGE_AGENT: Record<string, { agent: string; intent: string; stageType?: string }> = {
+    story: { agent: "Story Director", intent: "story_note", stageType: "story_bible_generate" },
+    characters: { agent: "Character Director", intent: "character_note", stageType: "character_generate" },
+    storyboard: { agent: "Storyboard Composer", intent: "storyboard_note", stageType: "storyboard_generate" },
+    visualization: { agent: "Visualization Director", intent: "visualization_note", stageType: "visualization_generate" },
+    video: { agent: "Video Orchestrator", intent: "video_note" },
+    export: { agent: "Export Agent", intent: "export_note" },
   };
-  const stageHint = body.stage && STAGE_AGENT[body.stage] ? STAGE_AGENT[body.stage] : null;
+
   const keywordMatch = AGENT_ROUTES.find((r) => r.keywords.test(text));
-  const route = keywordMatch
-    ? keywordMatch
-    : stageHint
-      ? {
-          agent: stageHint.agent,
-          intent: stageHint.intent,
-          reply: (m: string) => `${stageHint.agent} acknowledged. Applying to ${body.stage}: "${m.slice(0, 80)}".`,
+  let agent: string;
+  let intent: string;
+  let reply: string;
+  let stageType: string | undefined;
+
+  if (keywordMatch) {
+    const result = keywordMatch.action(text);
+    agent = keywordMatch.agent;
+    intent = keywordMatch.intent;
+    reply = result.reply;
+    stageType = "stageType" in result ? result.stageType : undefined;
+  } else if (body.stage && STAGE_AGENT[body.stage]) {
+    const hint = STAGE_AGENT[body.stage];
+    agent = hint.agent;
+    intent = hint.intent;
+    reply = `${hint.agent} acknowledged your note for the ${body.stage} stage: "${text.slice(0, 80)}". I'll apply it on the next regenerate.`;
+  } else {
+    agent = "Story Director";
+    intent = "general";
+    reply = `Understood — "${text.slice(0, 80)}". Standing by for the next directive.`;
+  }
+
+  // If the matched action wants a real job, enqueue it (with credit debit
+  // and dedupe just like the explicit POST routes). On any failure we still
+  // record the chat reply so the user sees what went wrong.
+  let jobId: string | undefined;
+  let jobStatus: string | undefined;
+  if (stageType) {
+    try {
+      const inflight = findInflightStage(p.id, stageType);
+      if (inflight) {
+        jobId = inflight.id;
+        jobStatus = inflight.status;
+        reply = `Already running — ${stageType} job ${inflight.id} is in flight.`;
+      } else {
+        // Pre-flight gate: characters/storyboard/viz require finalized story
+        const requiresFinalized =
+          stageType === "character_generate" ||
+          stageType === "storyboard_generate" ||
+          stageType === "visualization_generate";
+        if (
+          requiresFinalized &&
+          !(p as ProjectRow & { story_finalized_at?: string | null }).story_finalized_at
+        ) {
+          reply = "Story must be finalized first — generate the story bible and let auto-pilot finalize it.";
+        } else {
+          debitCredits(u.sub, stageType, { id: p.id, type: "project" });
+          const task = enqueueGenerationStage(stageType, p.id, u.sub, {});
+          jobId = task.id;
+          jobStatus = "queued";
+          reply = `${reply} Queued as job ${task.id}.`;
         }
-      : {
-          agent: "Story Director",
-          intent: "general",
-          reply: (m: string) => `Understood — "${m.slice(0, 80)}". Standing by for the next directive.`,
-        };
+      }
+    } catch (err) {
+      const e = err as Error;
+      reply = `Couldn't start ${stageType}: ${e.message}`;
+    }
+  }
+
   recordPlaygroundEvent({
     projectId: p.id,
     eventType: "agent_message",
-    agent: route.agent,
-    message: route.reply(text),
-    payload: { intent: route.intent },
+    agent,
+    message: reply,
+    payload: { intent, jobId, stageType },
   });
-  res.json({ ok: true, agent: route.agent, intent: route.intent });
+  res.json({ ok: true, agent, intent, jobId, jobStatus, stageType });
 });
 
 router.post("/:id/characters/generate", requireAuth, generationLimiter, (req, res) => {

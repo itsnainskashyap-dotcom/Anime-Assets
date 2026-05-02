@@ -1,15 +1,15 @@
 import { ComponentType, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Activity, BookOpen, Users, Mountain, LayoutTemplate, Layers, Film, Music,
-  Download, Send, Loader2, ShieldCheck, Lock, CheckCircle2, Circle,
-  RadioTower, BrainCircuit, AlertTriangle, MessageSquare, ChevronDown, ChevronUp,
+  Activity, BookOpen, Users, LayoutTemplate, Layers, Film,
+  Download, Send, Loader2, ShieldCheck, CheckCircle2, Circle,
+  RadioTower, AlertTriangle, MessageSquare, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { PiMagicWandDuotone, PiBookOpenDuotone, PiUsersDuotone, PiFilmScriptDuotone } from "react-icons/pi";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { AgentLog, PlaygroundEvent, Project } from "@/types/api";
 
 const LANG_FLAG: Record<string, string> = {
@@ -31,56 +31,104 @@ interface Stage {
   icon: ComponentType<{ className?: string }>;
   agent: string;
   description: string;
+  /** Project.current_stage values that map to this UI stage. */
+  backendStages: string[];
+  /** Pipeline progress floor — used for the global progress bar. */
+  progressFloor: number;
   matchEvent: (e: PlaygroundEvent) => boolean;
 }
 
+/**
+ * 6 stages — one per real backend pipeline phase. These mirror the
+ * `setProjectStage` calls in `artifacts/api-server/src/jobs/handlers.ts`.
+ * Anything outside this list (intake, environments, qc, prompt-compiler) was
+ * placeholder UI that never received events from the backend.
+ */
 const STAGES: Stage[] = [
-  { id: "intake", label: "Story Intake", icon: BookOpen, agent: "Story Director",
-    description: "Capturing your premise, tone and runtime target.",
-    matchEvent: (e) => /intake|story_prompt|project_created/i.test(e.event_type) },
-  { id: "story", label: "Story Director", icon: PiMagicWandDuotone, agent: "Story Director",
-    description: "Drafting the full story with acts, twists and climax — JSON in English, voiceover in your chosen language.",
-    matchEvent: (e) => /story_bible_(generate|generating|ready)|story_director|awaiting_finalization/i.test(e.event_type) },
-  { id: "finalize", label: "Story Finalization", icon: ShieldCheck, agent: "Auto Pilot",
-    description: "Story is auto-finalized as soon as the bible is ready — no click required.",
-    matchEvent: (e) => /story_finalized|story_unfinalized/i.test(e.event_type) },
-  { id: "bible", label: "Story Bible", icon: BookOpen, agent: "Story Bible Agent",
-    description: "World rules, lore, motifs and continuity constraints.",
-    matchEvent: (e) => /story_bible_approved|story_bible_ready|awaiting_finalization/i.test(e.event_type) },
-  { id: "characters", label: "Character Studio", icon: Users, agent: "Character Director",
-    description: "Full body reference + 3-angle model sheets per character.",
-    matchEvent: (e) => /character_(generate|generated|locked)|characters_ready/i.test(e.event_type) },
-  { id: "turnaround", label: "Turnaround Sheets", icon: Layers, agent: "Character Director",
-    description: "Front · ¾ · back views generated from the full body reference.",
-    matchEvent: (e) => /character_sheet_ready|character_locked|turnaround|angle_sheet/i.test(e.event_type) },
-  { id: "environments", label: "Environment Studio", icon: Mountain, agent: "Environment Director",
-    description: "Locations, time-of-day, weather, mood boards.",
-    matchEvent: (e) => /environment_(generate|generated|locked)/i.test(e.event_type) },
-  { id: "frames", label: "Start / End Frames", icon: Layers, agent: "Visualization Director",
-    description: "Per-chunk start frame, end frame, anchor stills.",
-    matchEvent: (e) => /(start|end)_frame|visualization_(generate|generated)/i.test(e.event_type) },
-  { id: "storyboard", label: "Storyboard Composer", icon: LayoutTemplate, agent: "Storyboard Composer",
-    description: "Scenes split into 10-second video chunks ready for rendering.",
-    matchEvent: (e) => /storyboard_(generate|generated|ready)/i.test(e.event_type) },
-  { id: "viz", label: "Visualization Pack", icon: Layers, agent: "Visualization Director",
-    description: "Frames + storyboard + refs bundled per chunk.",
-    matchEvent: (e) => /viz_pack|visualization_pack/i.test(e.event_type) },
-  { id: "compile", label: "Prompt Compiler", icon: BrainCircuit, agent: "Prompt Compiler",
-    description: "Builds the precise Animax Ultra payload per chunk.",
-    matchEvent: (e) => /prompt_compiled|payload_built/i.test(e.event_type) },
-  { id: "video", label: "Animax Ultra · Video", icon: Film, agent: "Video Orchestrator",
-    description: "Renders chunk videos with continuity from chunk N−1.",
-    matchEvent: (e) => /chunk_(queued|started|completed|video)/i.test(e.event_type) },
-  { id: "qc", label: "Quality Validator", icon: ShieldCheck, agent: "Quality Validator",
-    description: "Vision QA on every output; gates continuity for next chunk.",
-    matchEvent: (e) => /validation|quality_check/i.test(e.event_type) },
-  { id: "song", label: "Song & Lipsync", icon: Music, agent: "Audio Director",
-    description: "Lyrics, song render and lip-sync flow when enabled.",
-    matchEvent: (e) => /song|lipsync|audio_chunk/i.test(e.event_type) },
-  { id: "export", label: "Final Assembly", icon: Download, agent: "Export Agent",
-    description: "Stitched master, subtitles, downloadable assets.",
-    matchEvent: (e) => /export|assembly|master_render/i.test(e.event_type) },
+  {
+    id: "story",
+    label: "Story Director",
+    icon: PiMagicWandDuotone,
+    agent: "Story Director",
+    description:
+      "Writes the story bible — acts, scenes, characters, themes — then auto-finalizes it.",
+    backendStages: ["story_bible", "story_bible_ready", "story_finalized"],
+    progressFloor: 0,
+    matchEvent: (e) =>
+      /story_bible|story_director|story_finalized|story_unfinalized|awaiting_finalization|story_prompt|project_created/i.test(
+        e.event_type,
+      ),
+  },
+  {
+    id: "characters",
+    label: "Character Studio",
+    icon: Users,
+    agent: "Character Director",
+    description:
+      "Generates the full-body portrait + 3-angle turnaround sheets, then locks each character as canon.",
+    backendStages: ["characters", "characters_ready", "characters_locked"],
+    progressFloor: 25,
+    matchEvent: (e) =>
+      /character|turnaround|angle_sheet|characters_canonized/i.test(e.event_type),
+  },
+  {
+    id: "storyboard",
+    label: "Storyboard Composer",
+    icon: LayoutTemplate,
+    agent: "Storyboard Composer",
+    description: "Splits scenes into 10-second chunks ready for rendering.",
+    backendStages: ["storyboard", "storyboard_ready"],
+    progressFloor: 50,
+    matchEvent: (e) => /storyboard/i.test(e.event_type),
+  },
+  {
+    id: "visualization",
+    label: "Visualization Pack",
+    icon: Layers,
+    agent: "Visualization Director",
+    description:
+      "Per-scene start/end frames + scene boards + element refs — anchored on the canon character portraits.",
+    backendStages: ["visualization", "visualization_ready"],
+    progressFloor: 60,
+    matchEvent: (e) =>
+      /visualization|viz_pack|start_frame|end_frame|scene_board|element_ref/i.test(
+        e.event_type,
+      ),
+  },
+  {
+    id: "video",
+    label: "Animax Ultra · Video",
+    icon: Film,
+    agent: "Video Orchestrator",
+    description:
+      "Renders each 10-second chunk with continuity from chunk N−1.",
+    backendStages: ["video", "rendering"],
+    progressFloor: 70,
+    matchEvent: (e) =>
+      /chunk_(queued|started|completed|video|failed)|video_(chunk|render)|render_/i.test(
+        e.event_type,
+      ),
+  },
+  {
+    id: "export",
+    label: "Final Assembly",
+    icon: Download,
+    agent: "Export Agent",
+    description:
+      "Stitches the master, bakes subtitles, optionally renders song & lipsync, and produces the downloadable file.",
+    backendStages: ["exporting", "completed", "export_failed"],
+    progressFloor: 90,
+    matchEvent: (e) =>
+      /export|assembly|master_render|song|lipsync|audio_chunk/i.test(e.event_type),
+  },
 ];
+
+/** Map every known `project.current_stage` value to a UI stage id. */
+const CURRENT_STAGE_TO_UI: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const s of STAGES) for (const k of s.backendStages) map[k] = s.id;
+  return map;
+})();
 
 interface StageState {
   status: "idle" | "active" | "complete" | "error";
@@ -91,7 +139,7 @@ interface StageState {
 
 function deriveStageStates(
   events: PlaygroundEvent[],
-  isFinalized: boolean,
+  project: Project,
 ): Record<string, StageState> {
   const out: Record<string, StageState> = {};
   for (const s of STAGES) out[s.id] = { status: "idle", count: 0 };
@@ -105,14 +153,35 @@ function deriveStageStates(
       cur.lastMessage = e.message ?? cur.lastMessage;
       cur.lastAt = e.created_at;
       if (/error|failed/i.test(e.event_type)) cur.status = "error";
-      else if (/(completed|approved|ready|finalized|locked|generated)/i.test(e.event_type)) cur.status = "complete";
+      else if (
+        /(completed|approved|ready|finalized|locked|generated|canonized)/i.test(
+          e.event_type,
+        )
+      )
+        cur.status = "complete";
       else cur.status = "active";
     }
   }
-  // Story-finalize is a hard signal even if no event got recorded yet.
-  if (isFinalized) {
-    out.finalize.status = "complete";
-    out.finalize.lastMessage = out.finalize.lastMessage || "You finalized the story.";
+  // Promote stages that the backend has clearly already passed: any stage
+  // with a higher progress floor than the next one being active means the
+  // earlier stage is complete even if no terminal event was recorded.
+  const currentUiStage = project.current_stage
+    ? CURRENT_STAGE_TO_UI[project.current_stage]
+    : undefined;
+  if (currentUiStage) {
+    const currentIdx = STAGES.findIndex((s) => s.id === currentUiStage);
+    for (let i = 0; i < currentIdx; i++) {
+      if (out[STAGES[i].id].status === "idle") {
+        out[STAGES[i].id].status = "complete";
+      }
+    }
+    if (out[currentUiStage].status === "idle") {
+      out[currentUiStage].status = "active";
+    }
+  }
+  // Story finalization is a hard signal.
+  if (project.story_finalized_at && out.story.status !== "error") {
+    out.story.status = "complete";
   }
   return out;
 }
@@ -159,15 +228,34 @@ function ChatBubble({ event }: { event: PlaygroundEvent }) {
 
 export default function PlaygroundTab({ project }: { project: Project }) {
   const { token, api } = useAuth();
-  const queryClient = useQueryClient();
   const [events, setEvents] = useState<PlaygroundEvent[]>([]);
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [status, setStatus] = useState<"connecting" | "connected" | "reconnecting" | "error">("connecting");
-  const [selectedStage, setSelectedStage] = useState<string>("story");
+  // Default the active stage to whatever phase the backend says we're in.
+  // Falls back to "story" for brand-new projects.
+  const initialStage =
+    (project.current_stage && CURRENT_STAGE_TO_UI[project.current_stage]) || "story";
+  const [selectedStage, setSelectedStage] = useState<string>(initialStage);
+  // If the user hasn't manually clicked a stage, keep selectedStage in sync
+  // with the backend as the pipeline progresses.
+  const [stageManuallySelected, setStageManuallySelected] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
   const [storyDataOpen, setStoryDataOpen] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (stageManuallySelected) return;
+    const target = project.current_stage
+      ? CURRENT_STAGE_TO_UI[project.current_stage]
+      : undefined;
+    if (target && target !== selectedStage) setSelectedStage(target);
+  }, [project.current_stage, stageManuallySelected, selectedStage]);
+
+  const selectStage = (id: string): void => {
+    setStageManuallySelected(true);
+    setSelectedStage(id);
+  };
 
   const lang = project.language || "en";
   const langFlag = LANG_FLAG[lang] || "🌐";
@@ -292,14 +380,22 @@ export default function PlaygroundTab({ project }: { project: Project }) {
   }, [events]);
 
   /* ------------------------------ Derived data ----------------------------- */
-  const isFinalized = !!project.story_finalized_at;
-  const stageStates = useMemo(() => deriveStageStates(events, isFinalized), [events, isFinalized]);
+  const stageStates = useMemo(() => deriveStageStates(events, project), [events, project]);
   const chatEvents = useMemo(
     () => events.filter((e) => isAgentMessage(e) && (e.message ?? "").length > 0),
     [events],
   );
   const activeStage = STAGES.find((s) => s.id === selectedStage) ?? STAGES[0];
   const activeStageState = stageStates[activeStage.id];
+  const stageActivityEvents = useMemo(
+    () => events.filter((e) => activeStage.matchEvent(e)).slice(-8).reverse(),
+    [events, activeStage],
+  );
+  // Pipeline progress — prefer the backend's authoritative number, otherwise
+  // derive a floor from how many UI stages have completed.
+  const completedCount = Object.values(stageStates).filter((s) => s.status === "complete").length;
+  const derivedProgress = (completedCount / STAGES.length) * 100;
+  const overallProgress = Math.max(project.progress ?? 0, derivedProgress);
 
   /* ------------------------------ Mutations -------------------------------- */
   const sendChat = useMutation({
@@ -308,11 +404,6 @@ export default function PlaygroundTab({ project }: { project: Project }) {
         method: "POST",
         body: JSON.stringify({ message, stage: selectedStage }),
       }),
-  });
-
-  const finalizeStory = useMutation({
-    mutationFn: () => api(`/api/projects/${project.id}/story/finalize`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects", project.id] }),
   });
 
   const handleSend = (): void => {
@@ -327,23 +418,40 @@ export default function PlaygroundTab({ project }: { project: Project }) {
     <div className="h-full flex flex-col bg-gradient-to-br from-background via-background to-primary/[0.02] overflow-hidden">
 
       {/* TOP BAR */}
-      <div className="h-12 shrink-0 border-b border-border/50 bg-card/30 backdrop-blur flex items-center px-4 gap-3">
-        <div className="flex items-center gap-2 text-xs">
-          <span className={`w-2 h-2 rounded-full ${status === "connected" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
-          <span className="text-muted-foreground uppercase tracking-wider font-medium">
-            {status === "connected" ? "Live" : status === "connecting" ? "Connecting" : status === "reconnecting" ? "Reconnecting" : "Offline"}
-          </span>
+      <div className="shrink-0 border-b border-border/50 bg-card/30 backdrop-blur">
+        <div className="h-12 flex items-center px-4 gap-3">
+          <div className="flex items-center gap-2 text-xs">
+            <span className={`w-2 h-2 rounded-full ${status === "connected" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+            <span className="text-muted-foreground uppercase tracking-wider font-medium">
+              {status === "connected" ? "Live" : status === "connecting" ? "Connecting" : status === "reconnecting" ? "Reconnecting" : "Offline"}
+            </span>
+          </div>
+          <div className="h-4 w-px bg-border/60" />
+          <div className="text-xs text-muted-foreground">
+            Current stage: <span className="text-foreground font-medium">{activeStage.label}</span>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-300/80">
+              <ShieldCheck className="w-3 h-3" /> Auto-pilot
+            </span>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
+              {events.length} events · {logs.length} logs
+            </div>
+          </div>
         </div>
-        <div className="h-4 w-px bg-border/60" />
-        <div className="text-xs text-muted-foreground">
-          Current stage: <span className="text-foreground font-medium">{activeStage.label}</span>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-300/80">
-            <ShieldCheck className="w-3 h-3" /> Auto-pilot
-          </span>
-          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
-            {events.length} events · {logs.length} logs
+        {/* Pipeline progress bar */}
+        <div className="px-4 pb-2">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+            <span>Pipeline progress</span>
+            <span className="text-foreground font-medium">{Math.round(overallProgress)}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-card/60 overflow-hidden">
+            <motion.div
+              initial={false}
+              animate={{ width: `${overallProgress}%` }}
+              transition={{ duration: 0.6, ease: "easeOut" }}
+              className="h-full bg-gradient-to-r from-primary/70 via-primary to-emerald-400"
+            />
           </div>
         </div>
       </div>
@@ -362,7 +470,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
           return (
             <button
               key={s.id}
-              onClick={() => setSelectedStage(s.id)}
+              onClick={() => selectStage(s.id)}
               className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs whitespace-nowrap transition-all ${
                 isActive
                   ? "bg-primary/10 border-primary/40 text-foreground"
@@ -399,7 +507,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
               return (
                 <button
                   key={s.id}
-                  onClick={() => setSelectedStage(s.id)}
+                  onClick={() => selectStage(s.id)}
                   className={`w-full text-left rounded-lg px-3 py-2.5 transition-all flex items-start gap-3 group relative ${
                     isActive
                       ? "bg-primary/10 border border-primary/30"
@@ -453,16 +561,6 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                 <StageStatusBadge status={activeStageState.status} />
               </div>
 
-              {/* Story-finalize spotlight when on finalize stage */}
-              {activeStage.id === "finalize" && (
-                <FinalizeCard
-                  isFinalized={isFinalized}
-                  bibleReady={stageStates.bible.status === "complete"}
-                  onFinalize={() => finalizeStory.mutate()}
-                  pending={finalizeStory.isPending}
-                />
-              )}
-
               {/* Latest message card */}
               <div className="rounded-2xl border border-border/50 bg-card/40 backdrop-blur p-5 space-y-3">
                 <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
@@ -480,38 +578,38 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                 )}
               </div>
 
-              {/* Recent events for this stage */}
-              <div className="rounded-2xl border border-border/50 bg-card/30 backdrop-blur p-5">
-                <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground mb-4">
-                  <Activity className="w-3 h-3" /> Stage Activity
-                </div>
-                <div className="space-y-2">
-                  {events.filter((e) => activeStage.matchEvent(e)).slice(-8).reverse().map((e) => (
-                    <motion.div
-                      key={e.id}
-                      initial={{ opacity: 0, x: -6 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="flex items-start gap-3 text-xs p-2.5 rounded-lg bg-background/40 border border-border/30"
-                    >
-                      <Circle className="w-2 h-2 fill-primary text-primary shrink-0 mt-1.5" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-foreground/90">{e.message || e.event_type}</div>
-                        <div className="text-[10px] text-muted-foreground mt-0.5 uppercase tracking-wider">
-                          {e.event_type} · {new Date(e.created_at).toLocaleTimeString()}
+              {/* Recent events for this stage — only render when there's data */}
+              {stageActivityEvents.length > 0 && (
+                <div className="rounded-2xl border border-border/50 bg-card/30 backdrop-blur p-5">
+                  <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground mb-4">
+                    <Activity className="w-3 h-3" /> Stage Activity
+                    <span className="ml-auto text-[10px] font-normal normal-case tracking-normal text-muted-foreground/60">
+                      Last {stageActivityEvents.length}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {stageActivityEvents.map((e) => (
+                      <motion.div
+                        key={e.id}
+                        initial={{ opacity: 0, x: -6 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex items-start gap-3 text-xs p-2.5 rounded-lg bg-background/40 border border-border/30"
+                      >
+                        <Circle className="w-2 h-2 fill-primary text-primary shrink-0 mt-1.5" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-foreground/90">{e.message || e.event_type}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5 uppercase tracking-wider">
+                            {e.event_type} · {new Date(e.created_at).toLocaleTimeString()}
+                          </div>
                         </div>
-                      </div>
-                    </motion.div>
-                  ))}
-                  {events.filter((e) => activeStage.matchEvent(e)).length === 0 && (
-                    <div className="text-xs text-muted-foreground italic py-4 text-center">
-                      No events recorded for this stage yet.
-                    </div>
-                  )}
+                      </motion.div>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* ── Bible Generating Banner ──────────────────────────── */}
-              {bibleGenerating && !bibleReady && (
+              {/* ── Bible Generating Banner — only on the story stage ────── */}
+              {activeStage.id === "story" && bibleGenerating && !bibleReady && (
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -521,7 +619,7 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground">Story Director is writing your bible…</p>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                      All descriptions in English · Voiceover lines in {langFlag} {langName} · Switch to the Story Bible tab for a live typewriter preview.
+                      All descriptions in English · Voiceover lines in {langFlag} {langName}.
                     </p>
                   </div>
                 </motion.div>
@@ -721,10 +819,10 @@ export default function PlaygroundTab({ project }: { project: Project }) {
                 <p>Try a directive:</p>
                 <div className="space-y-1.5 pt-2">
                   {[
-                    "Rewrite the story",
+                    "Regenerate the story",
+                    "Regenerate the characters",
+                    "Regenerate the storyboard",
                     "Make Act 2 darker",
-                    "Regenerate hero character",
-                    "Change environment to rainy Tokyo",
                   ].map((s) => (
                     <button
                       key={s}
@@ -840,52 +938,3 @@ function StageStatusBadge({ status }: { status: StageState["status"] }) {
   );
 }
 
-function FinalizeCard({
-  isFinalized, bibleReady, onFinalize, pending,
-}: { isFinalized: boolean; bibleReady: boolean; onFinalize: () => void; pending: boolean }) {
-  if (isFinalized) {
-    return (
-      <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5 flex items-start gap-4">
-        <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
-        <div>
-          <p className="font-semibold text-emerald-200">Story Finalized</p>
-          <p className="text-sm text-emerald-200/70 mt-1">
-            Character Studio is unlocked. The Continuity Brain has snapshotted the canonical story
-            for the rest of the pipeline.
-          </p>
-        </div>
-      </div>
-    );
-  }
-  if (!bibleReady) {
-    return (
-      <div className="rounded-2xl border border-border/50 bg-card/30 p-5 flex items-start gap-4">
-        <Lock className="w-6 h-6 text-muted-foreground shrink-0 mt-0.5" />
-        <div>
-          <p className="font-semibold">Waiting for Story Director</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            The full story must be generated first. Open the Story Bible tab and click
-            <span className="text-foreground font-medium"> Generate Bible</span>.
-          </p>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="rounded-2xl border border-primary/40 bg-gradient-to-br from-primary/15 to-primary/5 p-5 flex items-start gap-4 relative overflow-hidden">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.15),transparent_60%)] pointer-events-none" />
-      <PiMagicWandDuotone className="w-6 h-6 text-primary shrink-0 mt-0.5 relative" />
-      <div className="relative flex-1">
-        <p className="font-semibold">Ready for Finalization</p>
-        <p className="text-sm text-muted-foreground mt-1">
-          Review the story end-to-end. Use the chat to tighten any act, then lock it in.
-          Characters won't generate until you click below.
-        </p>
-        <Button onClick={onFinalize} disabled={pending} className="mt-4 gap-2">
-          {pending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-          Finalize Story & Unlock Characters
-        </Button>
-      </div>
-    </div>
-  );
-}
