@@ -6,6 +6,15 @@ import { magnificFetch, MagnificError, poll } from "./magnificClient.js";
 import { saveBuffer } from "./storageProvider.js";
 import { logger } from "../lib/logger.js";
 import { safeFetch } from "../lib/safeFetch.js";
+import {
+  endpointInCooldown,
+  tripEndpointCooldown,
+  acquireSlot,
+  concurrencyFor,
+} from "./endpointThrottle.js";
+
+const VIDEO_DAILY_COOLDOWN_MS  = 4 * 60 * 60 * 1000;
+const VIDEO_MINUTE_COOLDOWN_MS = 90 * 1000;
 
 /**
  * Element entry as accepted by the Kling-v3-Omni-Pro `elements[]` body field.
@@ -217,7 +226,32 @@ export async function generateVideo(task: VideoTask): Promise<VideoResponse> {
     ? buildReferenceVideoPayload(task)
     : buildStandardVideoPayload(task);
 
-  const submit = await magnificFetch<VideoTaskResponse>(endpoint, { method: "POST", body });
+  if (endpointInCooldown(endpoint)) {
+    throw new MagnificError(
+      `Video endpoint ${endpoint} is in cooldown — try again after the daily/minute limit clears`,
+      503,
+    );
+  }
+  const release = await acquireSlot(endpoint, concurrencyFor(endpoint));
+  let submit: VideoTaskResponse;
+  try {
+    submit = await magnificFetch<VideoTaskResponse>(endpoint, { method: "POST", body });
+  } catch (err) {
+    if (err instanceof MagnificError && err.statusCode === 429) {
+      const msg = typeof err.response === "object" && err.response
+        ? JSON.stringify(err.response)
+        : err.message;
+      const isMinute = /minute/i.test(msg);
+      tripEndpointCooldown(
+        endpoint,
+        isMinute ? VIDEO_MINUTE_COOLDOWN_MS : VIDEO_DAILY_COOLDOWN_MS,
+        `429 ${isMinute ? "minute" : "daily"} limit on ${endpoint}`,
+      );
+    }
+    throw err;
+  } finally {
+    release();
+  }
   const taskId = submit.data?.task_id;
 
   let videoUrl: string | undefined =

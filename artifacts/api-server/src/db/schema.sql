@@ -413,6 +413,17 @@ CREATE TABLE IF NOT EXISTS provider_failover_events (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Persistent endpoint cooldowns: when a Magnific endpoint hits its daily
+-- quota (429), we record an "until" timestamp so we don't re-hammer it after
+-- an api-server restart wipes the in-memory cooldown registry.
+CREATE TABLE IF NOT EXISTS provider_endpoint_cooldowns (
+  endpoint TEXT PRIMARY KEY,
+  until_ms INTEGER NOT NULL,
+  reason TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE TABLE IF NOT EXISTS provider_capability_tests (
   id TEXT PRIMARY KEY,
   provider_name TEXT,

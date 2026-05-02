@@ -5,22 +5,25 @@ import { magnificFetch, MagnificError, poll } from "./magnificClient.js";
 import { saveBuffer } from "./storageProvider.js";
 import { logger } from "../lib/logger.js";
 import { safeFetch } from "../lib/safeFetch.js";
+import {
+  endpointInCooldown,
+  tripEndpointCooldown,
+  acquireSlot,
+  concurrencyFor,
+} from "./endpointThrottle.js";
 
-// Per-endpoint cooldown registry. When a Magnific image endpoint returns 429
-// (daily quota exhausted) we stop hammering it for the rest of the process
-// lifetime (or 1h, whichever ends first) and try the next endpoint in the
-// fallback chain. This prevents the entire visualization stage from failing
-// dozens of times per scene when an upstream quota is exhausted.
-const endpointCooldownUntil = new Map<string, number>();
-function endpointInCooldown(endpoint: string): boolean {
-  const until = endpointCooldownUntil.get(endpoint) || 0;
-  return Date.now() < until;
-}
-function tripEndpointCooldown(endpoint: string, reason: string): void {
-  const until = Date.now() + 60 * 60 * 1000; // 1h
-  endpointCooldownUntil.set(endpoint, until);
-  logger.warn({ endpoint, reason, until: new Date(until).toISOString() },
-    "image endpoint cooldown engaged — falling back to next provider");
+// Cooldown durations:
+//   - Daily quota (429 with "daily limit" message)  → 4h cooldown
+//   - Per-minute throttle (429 with "minute limit") → 90s cooldown
+//   - Schema validation error (400)                  → 5min cooldown
+const DAILY_COOLDOWN_MS  = 4 * 60 * 60 * 1000;
+const MINUTE_COOLDOWN_MS = 90 * 1000;
+const SCHEMA_COOLDOWN_MS = 5 * 60 * 1000;
+
+function classify429(message: string): { kind: "daily" | "minute"; cooldownMs: number } {
+  const lower = (message || "").toLowerCase();
+  if (lower.includes("minute")) return { kind: "minute", cooldownMs: MINUTE_COOLDOWN_MS };
+  return { kind: "daily", cooldownMs: DAILY_COOLDOWN_MS };
 }
 
 export interface ImageRequest {
@@ -238,6 +241,7 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
   let submitEndpoint: string | undefined;
   let lastError: unknown;
   for (const endpoint of chain) {
+    const release = await acquireSlot(endpoint, concurrencyFor(endpoint));
     try {
       submit = await magnificFetch<MagnificTaskResponse>(endpoint, {
         method: "POST",
@@ -247,13 +251,35 @@ export async function generateImage(req: ImageRequest): Promise<ImageResponse> {
       break;
     } catch (err) {
       lastError = err;
-      const is429 = err instanceof MagnificError && err.statusCode === 429;
-      if (is429) {
-        tripEndpointCooldown(endpoint, `429 from ${endpoint}`);
+      const me = err instanceof MagnificError ? err : null;
+      if (me && me.statusCode === 429) {
+        const msg = typeof me.response === "object" && me.response
+          ? JSON.stringify(me.response)
+          : me.message;
+        const { kind, cooldownMs } = classify429(msg);
+        tripEndpointCooldown(endpoint, cooldownMs, `429 ${kind} limit on ${endpoint}`);
         continue; // try next tier
       }
-      // Non-quota error — bubble up immediately.
+      if (me && me.statusCode === 400) {
+        // Only trip cooldown on schema/contract bugs (`Validation error` from
+        // the Magnific API). Skip prompt-content 400s — those are per-request
+        // (safety filter, prompt too long, bad ref URL) and locking out the
+        // whole endpoint for one bad prompt would block every other user.
+        const msg = typeof me.response === "object" && me.response
+          ? JSON.stringify(me.response)
+          : me.message;
+        const isSchemaBug = /validation error|field required|invalid_params/i.test(msg);
+        if (isSchemaBug) {
+          tripEndpointCooldown(endpoint, SCHEMA_COOLDOWN_MS, `400 schema error on ${endpoint}`);
+          continue;
+        }
+        // Per-request 400 (bad prompt, too-long input, etc.) — bubble up.
+        throw err;
+      }
+      // Other error — bubble up immediately.
       throw err;
+    } finally {
+      release();
     }
   }
   if (!submit || !submitEndpoint) {
